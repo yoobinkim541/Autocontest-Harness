@@ -1,9 +1,9 @@
 //! Private state files under `data/`: the directory is created 0700, files are written 0600 through
-//! a temp file + rename, newer schema versions are refused, and crashed writers' temp files are removed.
+//! a temp file + rename (on Windows, which has no modes, the user profile's ACL keeps them private),
+//! newer schema versions are refused, and crashed writers' temp files are removed.
 
-use std::fs::{self, DirBuilder, File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use serde::Deserialize;
@@ -24,7 +24,7 @@ pub fn private_dir(dir: &Path) -> Result<()> {
     if dir.is_dir() {
         return Ok(());
     }
-    DirBuilder::new().recursive(true).mode(0o700).create(dir).map_err(|err| at(dir, err))
+    crate::platform::dir_builder(0o700).create(dir).map_err(|err| at(dir, err))
 }
 
 /// The lock file beside `path` (`<stem>.lock`), opened for `flock`. When the directory does not
@@ -38,7 +38,8 @@ pub fn lock_file(path: &Path, create_dir: bool) -> Result<Option<File>> {
         private_dir(dir)?;
     }
     let lock = path.with_extension("lock");
-    let file = OpenOptions::new().create(true).truncate(false).write(true).mode(0o600).open(&lock);
+    let file =
+        crate::platform::with_mode(OpenOptions::new().create(true).truncate(false).write(true), 0o600).open(&lock);
     file.map(Some).map_err(|err| at(&lock, err))
 }
 
@@ -85,15 +86,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8], exclusive: bool) -> Result<()> {
     if exclusive {
         remove_leftovers(dir, &stem, &ext, pid);
     }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .mode(0o600)
+    let mut file = crate::platform::with_mode(OpenOptions::new().create(true).truncate(true).write(true), 0o600)
         .open(&tmp)
         .map_err(|err| at(&tmp, err))?;
     // A leftover with our pid keeps its old mode through `open`, so set it explicitly.
-    file.set_permissions(fs::Permissions::from_mode(0o600)).map_err(|err| at(&tmp, err))?;
+    crate::platform::set_mode(&tmp, 0o600).map_err(|err| at(&tmp, err))?;
     file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|err| at(&tmp, err))?;
     drop(file);
     if let Err(err) = fs::rename(&tmp, path) {

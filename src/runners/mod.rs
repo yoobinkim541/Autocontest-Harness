@@ -114,9 +114,14 @@ pub fn get(name: &str) -> Result<&'static dyn Runner> {
 
 // ---- Helpers for adapters ----
 
-/// Full path of `binary` on PATH.
+/// Full path of `binary` on PATH: the file `Command::new(binary)` would run (on Windows
+/// `<binary>.exe` unless the name has an extension).
 pub fn which(binary: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH")?.to_str()?.split(':').map(|dir| Path::new(dir).join(binary)).find(|p| p.is_file())
+    let name = match Path::new(binary).extension() {
+        Some(_) => binary.to_string(),
+        None => format!("{binary}{}", std::env::consts::EXE_SUFFIX),
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?).map(|dir| dir.join(&name)).find(|p| p.is_file())
 }
 
 /// The instructions as text, for harnesses that take them as the first message.
@@ -139,6 +144,7 @@ pub fn system_text(spec: &Spec) -> Result<Option<String>> {
 }
 
 /// Point `dst` at `src` (replacing an old symlink, never a real file). Returns one action line.
+/// On Windows a folder becomes a junction when symlinks need privileges the user lacks.
 pub fn link(src: &Path, dst: &Path) -> Result<String> {
     if !src.exists() {
         crate::bail!("설치할 원본이 없다: {}", src.display());
@@ -150,13 +156,41 @@ pub fn link(src: &Path, dst: &Path) -> Result<String> {
         if std::fs::canonicalize(dst).ok() == std::fs::canonicalize(src).ok() {
             return Ok(format!("ok {}", dst.display()));
         }
-        std::fs::remove_file(dst)?;
+        // A Windows link to a folder (symlink or junction) only goes away as a folder.
+        if std::fs::remove_file(dst).is_err() {
+            std::fs::remove_dir(dst)?;
+        }
     }
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::os::unix::fs::symlink(src, dst)?;
+    symlink(src, dst)?;
     Ok(format!("linked {} -> {}", dst.display(), src.display()))
+}
+
+#[cfg(unix)]
+fn symlink(src: &Path, dst: &Path) -> Result<()> {
+    Ok(std::os::unix::fs::symlink(src, dst)?)
+}
+
+#[cfg(windows)]
+fn symlink(src: &Path, dst: &Path) -> Result<()> {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    if !src.is_dir() {
+        return Ok(symlink_file(src, dst)?);
+    }
+    if symlink_dir(src, dst).is_ok() {
+        return Ok(());
+    }
+    // Without Developer Mode or admin rights only a junction can point at a folder. cmd reads
+    // `/` as an option marker, so the paths go with `\` only.
+    let native = |p: &Path| p.display().to_string().replace('/', "\\");
+    let (src, dst) = (native(src), native(dst));
+    let out = crate::process::output("cmd", &["/C", "mklink", "/J", &dst, &src], None, crate::process::LOCAL)?;
+    if !out.status.success() {
+        crate::bail!("{dst} 연결 실패: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(())
 }
 
 /// Write `content` to `path` unless it is already there. Returns one action line.
@@ -185,7 +219,9 @@ pub struct AgentDoc {
 }
 
 impl AgentDoc {
+    /// Line endings may be CRLF (a Windows checkout with `core.autocrlf`); they are read as LF.
     pub fn parse(text: &str) -> Result<AgentDoc> {
+        let text = text.replace("\r\n", "\n");
         let Some(rest) = text.strip_prefix("---\n") else {
             crate::bail!("에이전트 파일에 frontmatter가 없다")
         };

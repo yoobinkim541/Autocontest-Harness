@@ -114,12 +114,17 @@ impl Workspace for Orca {
     }
 
     /// Without a workspace id Orca uses the current worktree (the main session from inside Orca).
+    /// On Windows the terminal runs PowerShell (`pwsh.exe` when installed), which the typed line
+    /// is written for ([`shell_command`]).
     fn open(&self, spec: &Open<'_>) -> Result<String> {
         let command = shell_command(&spec.cwd, &spec.argv);
         let worktree = spec.workspace_id.map(|id| format!("id:{id}"));
         let mut args = vec!["terminal", "create"];
         if let Some(worktree) = &worktree {
             args.extend(["--worktree", worktree.as_str()]);
+        }
+        if cfg!(windows) {
+            args.extend(["--shell", if which("pwsh").is_some() { "pwsh.exe" } else { "powershell.exe" }]);
         }
         args.extend(["--title", spec.title, "--command", &command]);
         let result = orca_json(&args)?;

@@ -136,7 +136,7 @@ ach config unset max_running_by_level.5  # 기본값으로 되돌린다
 | `runner_args` | `{"omp": [], "claude": ["--permission-mode", "auto"]}` | 러너 이름별로, 그 어댑터의 모든 명령에 붙이는 인자 |
 | `max_running` | `6` | 모든 레벨을 합쳐 동시에 진행하는 공모전 수의 상한. `0`이면 실행을 모두 멈춘다 |
 | `max_running_by_level` | `{"1": 3, "2": 2, "3": 2, "4": 1, "5": 1}` | 레벨별 동시 진행 상한. `0`이면 그 레벨의 공모전은 `gate_pass`에 머물고 실행되지 않는다 |
-| `ram_reserve_gb` | `8` | 사용자가 쓰는 앱 몫으로 남겨 두는 메모리. 메모리 예산은 쓸 수 있는 메모리(macOS는 `vm_stat`의 free + inactive + speculative, Linux는 `/proc/meminfo`의 `MemAvailable`)에서 이 값을 뺀 것이다 |
+| `ram_reserve_gb` | `8` | 사용자가 쓰는 앱 몫으로 남겨 두는 메모리. 메모리 예산은 쓸 수 있는 메모리(macOS는 `vm_stat`의 free + inactive + speculative, Linux는 `/proc/meminfo`의 `MemAvailable`, Windows는 `GlobalMemoryStatusEx`의 사용 가능한 물리 메모리)에서 이 값을 뺀 것이다. 메모리가 16GB 이하인 기기는 1~2로 줄인다 |
 | `ram_gb_by_level` | `{"1": 2, "2": 3, "3": 4, "4": 6, "5": 8}` | 레벨별로 세션 하나가 쓴다고 보는 메모리. 측정값이 아닌 추정치다 |
 | `ram_gb_per_worker` | `1.5` | 세션 안 워커 하나가 쓰는 메모리. 권장 워커 수의 상한을 정한다 |
 | `max_workers` | `6` | 세션 하나에 권장하는 병렬 워커 수의 상한 |
@@ -159,7 +159,7 @@ ach config unset max_running_by_level.5  # 기본값으로 되돌린다
 `ach capacity`의 계산 방식:
 
 - **토큰 사용 속도.** `omp usage --json`이 알려 주는 사용 한도 창마다 pace = 남은 한도 비율 ÷ 남은 시간 비율을 구한다. 가장 빠듯한 창을 기준으로 pace가 1.5 이상이면 `max_workers`(maxing), 1~1.5면 그 절반(steady), 1 미만이면 그보다 줄인다(conserve). 남은 한도가 10% 이하이면 워커 1명만 권장하고 새 세션은 띄우지 않는다(throttle). omp가 없으면 메모리와 개수 상한만 적용한다.
-- **메모리.** 새 세션의 `ram_gb_by_level`이 메모리 예산 안에 들어갈 때만 띄운다. 쓸 수 있는 메모리는 macOS에서 `vm_stat`, Linux에서 `/proc/meminfo`의 `MemAvailable`로 읽는다. memory pressure가 `warning` 이상이면 새 세션을 띄우지 않는다. macOS는 memory pressure 수준을, Linux는 `/proc/pressure/memory`의 `some avg10`을 본다(10 이상 `warning`, 40 이상 `critical`, 파일이 없으면 알 수 없음). 메모리를 읽을 수 없으면 메모리 상한은 건너뛰고(개수·토큰 상한은 그대로 적용한다) `ach capacity --json`이 `ram.basis: "unavailable"`, null인 `ram.available_gb`·`ram.budget_gb`, `ram.warning`을 낸다. 평소에는 `ram.basis`가 `"measured"`다.
+- **메모리.** 새 세션의 `ram_gb_by_level`이 메모리 예산 안에 들어갈 때만 띄운다. 쓸 수 있는 메모리는 macOS에서 `vm_stat`, Linux에서 `/proc/meminfo`의 `MemAvailable`, Windows에서 `GlobalMemoryStatusEx`로 읽는다. memory pressure가 `warning` 이상이면 새 세션을 띄우지 않는다. macOS는 memory pressure 수준을, Linux는 `/proc/pressure/memory`의 `some avg10`을 보고(10 이상 `warning`, 40 이상 `critical`, 파일이 없으면 알 수 없음), Windows는 메모리 사용률을 본다(85% 이상 `warning`, 95% 이상 `critical`). 메모리를 읽을 수 없으면 메모리 상한은 건너뛰고(개수·토큰 상한은 그대로 적용한다) `ach capacity --json`이 `ram.basis: "unavailable"`, null인 `ram.available_gb`·`ram.budget_gb`, `ram.warning`을 낸다. 평소에는 `ram.basis`가 `"measured"`다.
 - **개수 상한.** 토큰·메모리 조건 위에 `max_running`과 `max_running_by_level`을 함께 적용한다. `running`과 `plan_review` 공모전을 진행 중으로 센다.
 
 ## CLI 명령
@@ -264,7 +264,7 @@ ach schedule remove      # 지운다(다른 스케줄러는 --scheduler orca|lau
 - **GitHub Actions 끄기.** 저장소를 만든 뒤 GitHub Actions를 끈다(`gh api -X PUT repos/<소유자>/<저장소>/actions/permissions -F enabled=false`). 여기서 실패하면 경고이고, route JSON의 `warnings`에 남는다.
 - `existing_contests.md`와 커밋 메시지에 쓰는 제목은 한 줄로 만든다.
 
-`ach launch <id>`는 설정한 러너를 설정한 작업 환경에서 레벨 지시문으로 띄운다. 모든 공모전 세션은 `env ACH_SESSION=<id> PATH=<클론>/bin:… <명령>`으로 돈다([CLI가 강제하는 승인](../README_ko.md#cli가-강제하는-승인) 참고). `data/launch.lock`이 용량 확인과 실행을 차례로 묶으므로 두 실행이 함께 상한을 통과하지 못한다. `--dry-run`은 아무것도 쓰지 않는다.
+`ach launch <id>`는 설정한 러너를 설정한 작업 환경에서 레벨 지시문으로 띄운다. 모든 공모전 세션은 `env ACH_SESSION=<id> PATH=<클론>/bin:… <명령>`으로 돈다([CLI가 강제하는 승인](../README_ko.md#cli가-강제하는-승인) 참고). Windows에서는 Orca 터미널이 같은 변수를 PowerShell로 받고(`$env:ACH_SESSION = …; $env:PATH = …; & <명령>`) `PATH` 항목은 `;`로 잇는다. `data/launch.lock`이 용량 확인과 실행을 차례로 묶으므로 두 실행이 함께 상한을 통과하지 못한다. `--dry-run`은 아무것도 쓰지 않는다.
 
 `route`, `launch`, `tick`은 네트워크·세션 작업을 배타적 레지스트리 잠금 밖에서 항목 사본으로 하고, 그동안 항목의 상태와 이력이 바뀌지 않았을 때만 결과를 저장한다. `collect`의 마감 갱신이나 새 점수 같은 동시 수정은 그대로 남는다. `route`가 성공하고 이어진 실행이 실패하면 항목은 `routed`에 머문다.
 

@@ -1,7 +1,6 @@
 //! Setup: `ach init` scaffolding, `ach config` edits, per-agent model choices.
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -16,8 +15,11 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-fn mode(path: &Path) -> u32 {
-    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+/// The permission bits of `path` are `want` (Windows has none to check).
+fn assert_mode(path: &Path, want: u32) {
+    if let Some(mode) = harness::platform::mode(&std::fs::metadata(path).unwrap()) {
+        assert_eq!(mode, want, "{}", path.display());
+    }
 }
 
 #[test]
@@ -34,7 +36,7 @@ fn config_set_validates_before_writing_and_unset_restores_the_default() {
     assert_eq!(config::get_at(&file, Some("schedule.scheduler")).unwrap(), "orca");
     assert_eq!(config::get_at(&file, Some("auto_launch")).unwrap(), true);
     assert_eq!(config::get_at(&file, Some("agent_models.ContestJudge")).unwrap(), "provider/strong:high");
-    assert_eq!(mode(&file), 0o600);
+    assert_mode(&file, 0o600);
 
     // Invalid values, unknown keys and malformed keys are refused and leave the file as it was.
     let before = std::fs::read(&file).unwrap();
@@ -138,7 +140,7 @@ fn checkout(name: &str) -> PathBuf {
     let root = base.join("checkout");
     std::fs::create_dir_all(root.join("data")).unwrap();
     for dir in ["harness", "agents", "skills"] {
-        std::os::unix::fs::symlink(repo.join(dir), root.join(dir)).unwrap();
+        harness::runners::link(&repo.join(dir), &root.join(dir)).unwrap();
     }
     for example in ["config.example.json", "profile.example.md"] {
         std::fs::copy(repo.join("data").join(example), root.join("data").join(example)).unwrap();
@@ -149,8 +151,8 @@ fn checkout(name: &str) -> PathBuf {
 #[test]
 fn init_creates_private_files_once_and_never_overwrites() {
     let root = checkout("init");
-    // A fresh clone's `data/` gets the umask's mode, which lets other users list it.
-    std::fs::set_permissions(root.join("data"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A fresh clone's `data/` gets the umask's mode, which lets other users list it (Unix).
+    harness::platform::set_mode(&root.join("data"), 0o755).unwrap();
     let run = || {
         let out = Command::new(env!("CARGO_BIN_EXE_ach"))
             .args(["init", "--json"])
@@ -163,12 +165,13 @@ fn init_creates_private_files_once_and_never_overwrites() {
     };
     let first = run();
     let created: Vec<&str> = first["created"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-    assert!(created.iter().any(|p| p.ends_with("data/config.json")), "{first}");
-    assert!(created.iter().any(|p| p.ends_with("data/profile.md")), "{first}");
-    assert_eq!(mode(&root.join("data/config.json")), 0o600);
-    assert_eq!(first["tightened"], json!([root.join("data").display().to_string()]), "{first}");
-    assert_eq!(mode(&root.join("data")), 0o700);
-    assert_eq!(mode(&root.join("data/profile.md")), 0o600);
+    assert!(created.iter().any(|p| Path::new(p).ends_with("data/config.json")), "{first}");
+    assert!(created.iter().any(|p| Path::new(p).ends_with("data/profile.md")), "{first}");
+    assert_mode(&root.join("data/config.json"), 0o600);
+    let tightened = if cfg!(unix) { json!([root.join("data").display().to_string()]) } else { json!([]) };
+    assert_eq!(first["tightened"], tightened, "{first}");
+    assert_mode(&root.join("data"), 0o700);
+    assert_mode(&root.join("data/profile.md"), 0o600);
     assert!(first["checks"].as_array().is_some_and(|c| !c.is_empty()));
     assert!(first["next"].as_str().unwrap().ends_with("INIT.md"));
 

@@ -16,6 +16,7 @@ pub mod install;
 pub mod launch;
 pub mod ledger;
 pub mod paths;
+pub mod platform;
 pub mod process;
 pub mod profile;
 pub mod registry;

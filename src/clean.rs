@@ -216,9 +216,8 @@ fn archive_target(entry: &Entry, archive_dir: Option<&Path>) -> PathBuf {
 }
 
 fn copy_into(folder: &Path, files: &[String], target: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(target)?;
-    fs::set_permissions(target, fs::Permissions::from_mode(0o700))?;
+    crate::platform::set_mode(target, 0o700)?;
     for file in files {
         if folder_relative(folder, file).is_none() || !resolves_inside(folder, file) {
             crate::bail!("폴더 밖을 가리키는 파일은 보관하지 않는다: {file}");

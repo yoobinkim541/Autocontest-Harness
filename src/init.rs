@@ -2,7 +2,6 @@
 //! conversational part of setup (what to ask the user, how to apply it) is `INIT.md`, which an
 //! agent follows; this command is the part that must not depend on a model.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use serde::Serialize;
@@ -45,8 +44,8 @@ pub fn init(root: &Path) -> Result<Report> {
     if data.is_dir() {
         // A clone already has `data/` (it holds the committed examples), with whatever the umask gave it.
         let at = |e: std::io::Error| Error(format!("{}: {e}", data.display()));
-        if std::fs::metadata(&data).map_err(at)?.permissions().mode() & 0o077 != 0 {
-            std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700)).map_err(at)?;
+        if crate::platform::mode(&std::fs::metadata(&data).map_err(at)?).is_some_and(|mode| mode & 0o077 != 0) {
+            crate::platform::set_mode(&data, 0o700).map_err(at)?;
             report.tightened.push(data.display().to_string());
         } else {
             report.kept.push(data.display().to_string());

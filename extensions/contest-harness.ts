@@ -9,7 +9,7 @@
 
 import { execFile } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 type NotifyType = 'info' | 'warning' | 'error'
@@ -61,13 +61,14 @@ const ROOT = (() => {
   }
 })()
 
-// `ach` is not on the user's PATH: `scripts/install.sh` puts it in the checkout's `bin/`.
+// `ach` is not on the user's PATH: the install script puts it in the checkout's `bin/`.
+const EXE = process.platform === 'win32' ? '.exe' : ''
 function harnessBin(): string {
   const candidates = [
     process.env.ACH_BIN,
-    join(ROOT, 'bin', 'ach'),
-    join(ROOT, 'target', 'release', 'ach'),
-    join(ROOT, 'target', 'debug', 'ach'),
+    join(ROOT, 'bin', `ach${EXE}`),
+    join(ROOT, 'target', 'release', `ach${EXE}`),
+    join(ROOT, 'target', 'debug', `ach${EXE}`),
   ]
   for (const c of candidates) if (c && existsSync(c)) return c
   return 'ach'
@@ -209,7 +210,7 @@ export default function (omp: HostApi): void {
   // starts inherit this process's environment, so put the checkout's `bin/` first.
   const bin = join(ROOT, 'bin')
   const path = process.env.PATH ?? ''
-  if (!path.split(':').includes(bin)) process.env.PATH = path ? `${bin}:${path}` : bin
+  if (!path.split(delimiter).includes(bin)) process.env.PATH = path ? `${bin}${delimiter}${path}` : bin
   omp.registerCommand('contest', {
     description: '공모전 하네스: 인자 없으면 보드·용량 요약, <id>면 그 공모전',
     handler: async (args, ctx) => {

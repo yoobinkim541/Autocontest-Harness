@@ -1,18 +1,20 @@
 use std::fs::{self, File};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
-use super::{Open, Workspace, shell_join};
+use super::{Open, Workspace};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::registry::Entry;
 
 pub struct Headless;
 
+#[cfg(unix)]
 const SIGTERM: i32 = 15;
+#[cfg(unix)]
 const ESRCH: i32 = 3;
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn setsid() -> i32;
     fn kill(pid: i32, sig: i32) -> i32;
@@ -47,14 +49,20 @@ fn log_path(handle: &str) -> Result<PathBuf> {
     }
 }
 
-/// The start time of `pid` as `ps -o lstart=` prints it, with spaces and colons replaced so it fits
-/// in the handle. `None` when no such process exists.
+/// The start time of `pid`, made to fit in the handle: on Unix what `ps -o lstart=` prints with
+/// spaces and colons replaced, on Windows the creation time in 100 ns ticks. `None` when no such
+/// process exists.
 pub fn start_time(pid: i32) -> Option<String> {
-    let pid = pid.to_string();
-    let out = crate::process::output("ps", &["-o", "lstart=", "-p", &pid], None, crate::process::LOCAL).ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let words: Vec<&str> = text.split_whitespace().collect();
-    (out.status.success() && !words.is_empty()).then(|| words.join("_").replace(':', "."))
+    #[cfg(windows)]
+    return crate::platform::process_start(u32::try_from(pid).ok()?);
+    #[cfg(unix)]
+    {
+        let pid = pid.to_string();
+        let out = crate::process::output("ps", &["-o", "lstart=", "-p", &pid], None, crate::process::LOCAL).ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let words: Vec<&str> = text.split_whitespace().collect();
+        (out.status.success() && !words.is_empty()).then(|| words.join("_").replace(':', "."))
+    }
 }
 
 impl Workspace for Headless {
@@ -74,25 +82,32 @@ impl Workspace for Headless {
         Ok(None)
     }
 
-    /// Detached in a new session with stdin closed; stdout and stderr go to `.harness/session.log`.
+    /// Detached in a new session (Unix) or a console-less process group (Windows) with stdin
+    /// closed; stdout and stderr go to `.harness/session.log`.
     fn open(&self, spec: &Open<'_>) -> Result<String> {
         let meta = spec.cwd.join(".harness");
         fs::create_dir_all(&meta)?;
         let log = meta.join("session.log");
         let out = File::options().create(true).append(true).open(&log)?;
         let err = out.try_clone()?;
-        let mut command = Command::new("sh");
-        command
-            .arg("-c")
-            .arg(shell_join(&spec.argv))
-            .current_dir(&spec.cwd)
-            .stdin(Stdio::null())
-            .stdout(out)
-            .stderr(err);
-        // SAFETY: setsid is async-signal-safe and touches no memory of the parent.
-        unsafe {
-            command.pre_exec(|| if setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
-        }
+        #[cfg(unix)]
+        let mut command = {
+            use std::os::unix::process::CommandExt;
+            let mut command = std::process::Command::new("sh");
+            command.arg("-c").arg(super::shell_join(&spec.argv));
+            // SAFETY: setsid is async-signal-safe and touches no memory of the parent.
+            unsafe {
+                command.pre_exec(|| if setsid() < 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) });
+            }
+            command
+        };
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = super::command(&spec.argv)?;
+            crate::platform::own_group(&mut command);
+            command
+        };
+        command.current_dir(&spec.cwd).stdin(Stdio::null()).stdout(out).stderr(err);
         let child = command.spawn().map_err(|e| Error(format!("headless 실행 실패: {e}")))?;
         let pid = child.id();
         // The start time lets `close` tell this session from a later process that reused the pid.
@@ -107,30 +122,45 @@ impl Workspace for Headless {
         Ok(rows[rows.len().saturating_sub(lines)..].join("\n"))
     }
 
-    /// SIGTERM to the session's process group (`sh -c` and the runner under it) if it still runs.
-    /// Never a bare pid: when the pid now belongs to a process with another start time, the session
-    /// is gone and the handle is stale, which counts as closed.
+    /// Stop the session if it still runs: on Unix SIGTERM to its process group (`sh -c` and the
+    /// runner under it), on Windows `taskkill /T` on its process tree. Never a bare pid: when the
+    /// pid now belongs to a process with another start time, the session is gone and the handle is
+    /// stale, which counts as closed.
     fn close(&self, handle: &str) -> Result<()> {
         let (pid, start) = parse(handle)?;
-        // SAFETY: kill only sends a signal; signal 0 just probes whether the group exists.
-        if unsafe { kill(-pid, 0) } != 0 {
-            return Ok(());
-        }
-        // While any member of the group lives, its id (the leader's pid) cannot be handed out again;
-        // so only a live leader with a different start time means the pid was reused.
-        if let (Some(start), Some(now)) = (start, start_time(pid))
-            && now != start
+        #[cfg(windows)]
         {
-            return Ok(());
-        }
-        // SAFETY: as above; the child called setsid, so its pid is its process group id.
-        if unsafe { kill(-pid, SIGTERM) } != 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() != Some(ESRCH) {
-                crate::bail!("headless 세션(pid {pid}) 종료 실패: {err}");
+            let Some(now) = start_time(pid) else { return Ok(()) };
+            if start.is_some_and(|start| start != now) {
+                return Ok(());
             }
+            if !crate::platform::taskkill(pid.unsigned_abs()) && start_time(pid).is_some() {
+                crate::bail!("headless 세션(pid {pid}) 종료 실패");
+            }
+            Ok(())
         }
-        Ok(())
+        #[cfg(unix)]
+        {
+            // SAFETY: kill only sends a signal; signal 0 just probes whether the group exists.
+            if unsafe { kill(-pid, 0) } != 0 {
+                return Ok(());
+            }
+            // While any member of the group lives, its id (the leader's pid) cannot be handed out
+            // again; so only a live leader with a different start time means the pid was reused.
+            if let (Some(start), Some(now)) = (start, start_time(pid))
+                && now != start
+            {
+                return Ok(());
+            }
+            // SAFETY: as above; the child called setsid, so its pid is its process group id.
+            if unsafe { kill(-pid, SIGTERM) } != 0 {
+                let err = std::io::Error::last_os_error();
+                if err.raw_os_error() != Some(ESRCH) {
+                    crate::bail!("headless 세션(pid {pid}) 종료 실패: {err}");
+                }
+            }
+            Ok(())
+        }
     }
 
     fn remove_workspace(&self, _workspace_id: &str) -> Result<()> {

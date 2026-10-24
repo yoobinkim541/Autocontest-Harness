@@ -2,7 +2,6 @@
 //! credential prompt or network stall cannot block the harness forever.
 
 use std::io::Read;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::sync::LazyLock;
@@ -17,12 +16,6 @@ pub const NETWORK: Duration = Duration::from_secs(120);
 /// Budget for local commands (git status, tmux, orca).
 pub const LOCAL: Duration = Duration::from_secs(30);
 
-const SIGKILL: i32 = 9;
-
-unsafe extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
 /// The user configured `core.sshCommand` (an identity file or proxy); `GIT_SSH_COMMAND` would
 /// override it, so it is left alone then.
 static USER_SSH_COMMAND: LazyLock<bool> = LazyLock::new(|| {
@@ -35,10 +28,12 @@ static USER_SSH_COMMAND: LazyLock<bool> = LazyLock::new(|| {
 });
 
 /// Runs `program args` with stdin closed and stdout/stderr captured. Git is told never to prompt.
-/// The child runs in its own process group; the whole group is killed when it exceeds `timeout`.
+/// The child runs in its own process group (Unix) or console-less process group (Windows); the
+/// whole group or process tree is killed when it exceeds `timeout`.
 pub fn output(program: &str, args: &[&str], cwd: Option<&Path>, timeout: Duration) -> Result<Output> {
     let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    crate::platform::own_group(&mut command);
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
@@ -47,7 +42,7 @@ pub fn output(program: &str, args: &[&str], cwd: Option<&Path>, timeout: Duratio
         command.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=15");
     }
     let mut child = command.spawn().map_err(|err| Error(format!("{program} 실행 실패: {err}")))?;
-    let pgid = i32::try_from(child.id()).unwrap_or(0);
+    let pid = child.id();
     // Drain the pipes on threads so a chatty child cannot fill a pipe buffer and stall.
     let stdout = child.stdout.take().map(drain);
     let stderr = child.stderr.take().map(drain);
@@ -58,7 +53,7 @@ pub fn output(program: &str, args: &[&str], cwd: Option<&Path>, timeout: Duratio
             break status;
         }
         if started.elapsed() >= timeout {
-            kill_group(pgid);
+            crate::platform::kill_tree(pid);
             let _ = child.kill();
             let _ = child.wait();
             return Err(timed_out());
@@ -74,15 +69,6 @@ pub fn output(program: &str, args: &[&str], cwd: Option<&Path>, timeout: Duratio
     let stdout = collect(stdout);
     let stderr = collect(stderr);
     Ok(Output { status, stdout, stderr })
-}
-
-fn kill_group(pgid: i32) {
-    if pgid > 0 {
-        // SAFETY: plain syscall; a negative pid addresses the group this function created.
-        unsafe {
-            kill(-pgid, SIGKILL);
-        }
-    }
 }
 
 fn drain(mut pipe: impl Read + Send + 'static) -> Receiver<Vec<u8>> {

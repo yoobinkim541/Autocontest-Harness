@@ -106,14 +106,20 @@ pub fn recommend(windows: &[Window], max_workers: usize) -> IndexMap<String, Val
     result
 }
 
-/// Reusable memory in GB (one decimal): `MemAvailable` from `/proc/meminfo` on Linux, free +
-/// inactive + speculative pages from `vm_stat` elsewhere. `None` when neither can be read.
+/// Reusable memory in GB (one decimal): `MemAvailable` from `/proc/meminfo` on Linux, available
+/// physical memory from `GlobalMemoryStatusEx` on Windows, free + inactive + speculative pages
+/// from `vm_stat` elsewhere. `None` when none can be read.
 pub fn free_ram_gb() -> Option<f64> {
     if cfg!(target_os = "linux") {
         return parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?);
     }
-    let out = process::output("vm_stat", &[], None, process::LOCAL).ok().filter(|o| o.status.success())?;
-    parse_vm_stat(&String::from_utf8_lossy(&out.stdout))
+    #[cfg(windows)]
+    return crate::platform::memory_status().map(|(avail, _)| round_to(avail as f64 / 1024f64.powi(3), 1));
+    #[cfg(not(windows))]
+    {
+        let out = process::output("vm_stat", &[], None, process::LOCAL).ok().filter(|o| o.status.success())?;
+        parse_vm_stat(&String::from_utf8_lossy(&out.stdout))
+    }
 }
 
 /// `vm_stat` output: free + inactive + speculative pages in GB; `None` without a page size or any
@@ -157,22 +163,37 @@ pub fn parse_psi(text: &str) -> &'static str {
     }
 }
 
+/// Windows memory load (share of physical memory in use): at least 95% is `critical`, at least
+/// 85% `warning`, below that `normal`.
+pub fn load_pressure(load: u32) -> &'static str {
+    match load {
+        95.. => "critical",
+        85.. => "warning",
+        _ => "normal",
+    }
+}
+
 /// Kernel memory pressure (`normal`, `warning`, `critical`), or `unknown`: PSI on Linux, the
-/// `kern.memorystatus_vm_pressure_level` sysctl on macOS.
+/// `kern.memorystatus_vm_pressure_level` sysctl on macOS, the memory load on Windows.
 pub fn memory_pressure() -> String {
     if cfg!(target_os = "linux") {
         return std::fs::read_to_string("/proc/pressure/memory").map_or("unknown", |t| parse_psi(&t)).to_string();
     }
-    let level = process::output("sysctl", &["-n", "kern.memorystatus_vm_pressure_level"], None, process::LOCAL)
-        .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i64>().ok());
-    match level {
-        Some(1) => "normal",
-        Some(2) => "warning",
-        Some(4) => "critical",
-        _ => "unknown",
+    #[cfg(windows)]
+    return crate::platform::memory_status().map_or("unknown", |(_, load)| load_pressure(load)).to_string();
+    #[cfg(not(windows))]
+    {
+        let level = process::output("sysctl", &["-n", "kern.memorystatus_vm_pressure_level"], None, process::LOCAL)
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i64>().ok());
+        match level {
+            Some(1) => "normal",
+            Some(2) => "warning",
+            Some(4) => "critical",
+            _ => "unknown",
+        }
+        .to_string()
     }
-    .to_string()
 }
 
 /// Capacity with measured memory and the live usage report.

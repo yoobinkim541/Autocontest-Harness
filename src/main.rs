@@ -747,7 +747,7 @@ fn run(cli: &Cli) -> Result<u8> {
             let note = note_value(note, note_file)?;
             let raw = read_file(file)?;
             let judge: Value = serde_json::from_str(&raw).map_err(|err| Error(format!("{}: {err}", file.display())))?;
-            let shown = file.canonicalize().unwrap_or_else(|_| file.clone());
+            let shown = harness::paths::canonicalize(file).unwrap_or_else(|_| file.clone());
             let record =
                 registry::score_record(&judge, stage, &shown.to_string_lossy(), note.as_deref().unwrap_or(""))?;
             registry::write(|reg| {

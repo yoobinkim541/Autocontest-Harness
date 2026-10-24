@@ -49,6 +49,7 @@ fn spec(dir: &Path, system: bool, model: bool, overlay: bool, extra: &[&str]) ->
 fn omp_commands() {
     let dir = scratch("omp");
     let d = dir.display().to_string();
+    let at = |name: &str| dir.join(name).display().to_string();
     let full = spec(&dir, true, false, true, &["--thinking", "high"]);
     let runner = runners::get("omp").unwrap();
     assert!(runner.subagents());
@@ -59,19 +60,26 @@ fn omp_commands() {
             "--cwd".into(),
             d.clone(),
             "--config".into(),
-            format!("{d}/omp-preset.yml"),
+            at("omp-preset.yml"),
             "--append-system-prompt".into(),
-            format!("{d}/system.md"),
+            at("system.md"),
             "--thinking".into(),
             "high".into(),
-            format!("@{d}/launch-prompt.md"),
+            format!("@{}", at("launch-prompt.md")),
             "시작해.".into(),
         ]
     );
     let bare = spec(&dir, false, false, false, &[]);
     assert_eq!(
         runner.oneshot(&bare).unwrap(),
-        vec!["omp".into(), "--cwd".into(), d.clone(), "-p".into(), format!("@{d}/launch-prompt.md"), "시작해.".into()]
+        vec![
+            "omp".into(),
+            "--cwd".into(),
+            d.clone(),
+            "-p".into(),
+            format!("@{}", at("launch-prompt.md")),
+            "시작해.".into()
+        ]
     );
 }
 
@@ -83,7 +91,7 @@ fn claude_commands() {
     assert_eq!(runner.orca_agent(), Some("claude"));
     // The instructions arrive as an `@path` mention; `--` keeps list options from swallowing it.
     let full = spec(&dir, true, true, false, &["--permission-mode", "auto", "--add-dir", "/x"]);
-    let mention = format!("@{}/launch-prompt.md 시작해.", dir.display());
+    let mention = format!("@{} 시작해.", dir.join("launch-prompt.md").display());
     let expected = s(&[
         "claude",
         "--model",
@@ -171,7 +179,7 @@ fn claude_install_is_idempotent_and_applies_models_in_a_scratch_home() {
     let third = claude::install_at(&root(), &home).unwrap();
     assert_eq!(third.iter().filter(|l| l.starts_with("removed")).count(), 1);
     assert!(!dir.join("Gone.md").exists());
-    std::fs::remove_file(&skill).unwrap();
+    remove_link(&skill);
     std::fs::create_dir_all(&skill).unwrap();
     assert!(claude::install_at(&root(), &home).is_err());
     std::fs::remove_dir(&skill).unwrap();
@@ -295,7 +303,32 @@ fn shell_quoting() {
     assert_eq!(shell_quote("@/tmp/a.md"), "@/tmp/a.md");
     assert_eq!(shell_quote("it's 시작"), r"'it'\''s 시작'");
     assert_eq!(shell_quote(""), "''");
+    #[cfg(unix)]
     assert_eq!(shell_command(Path::new("/a b"), &s(&["omp", "-p", "x y"])), "cd '/a b' && omp -p 'x y'");
+}
+
+#[test]
+fn powershell_lines_quote_every_word_and_set_the_env_prefix() {
+    use harness::workspaces::{powershell_command, powershell_quote, split_env};
+    assert_eq!(powershell_quote("omp"), "'omp'");
+    assert_eq!(powershell_quote("it's 시작"), "'it''s 시작'");
+    assert_eq!(powershell_quote("\u{2019}x"), "'\u{2019}\u{2019}x'", "typographic quotes end strings too");
+    assert_eq!(powershell_quote("@C:\\a b\\p.md $x;y"), "'@C:\\a b\\p.md $x;y'");
+    assert_eq!(powershell_quote(""), "''");
+    let argv = s(&["env", "ACH_SESSION=x", "PATH=C:\\bin;D:\\y", "omp", "-p", "@C:\\it's.md"]);
+    let (env, command) = split_env(&argv);
+    assert_eq!(env, vec![("ACH_SESSION", "x"), ("PATH", "C:\\bin;D:\\y")]);
+    assert_eq!(command, &argv[3..]);
+    assert_eq!(
+        powershell_command(Path::new("C:\\a b"), &argv),
+        "Set-Location -LiteralPath 'C:\\a b'; if ($?) { $env:ACH_SESSION = 'x'; $env:PATH = 'C:\\bin;D:\\y'; & 'omp' '-p' '@C:\\it''s.md' }"
+    );
+    // Without `env`, or with a word that is not an assignment, nothing is taken as a variable.
+    assert_eq!(split_env(&s(&["omp", "A=b"])), (vec![], &s(&["omp", "A=b"])[..]));
+    let odd = s(&["env", "A-B=c", "omp"]);
+    assert_eq!(split_env(&odd), (vec![], &odd[1..]));
+    #[cfg(windows)]
+    assert_eq!(shell_command(Path::new("C:\\a b"), &argv), powershell_command(Path::new("C:\\a b"), &argv));
 }
 
 #[test]
@@ -336,7 +369,7 @@ fn render_prompt_fills_placeholders_and_notes_missing_subagents() {
     assert!(omp.contains("2026-11-30T23:59+09:00"));
     assert!(omp.contains("저장소: 없음"));
     assert!(omp.contains("ach transition demo-contest awaiting_approval"));
-    let level = std::fs::read_to_string(root().join("harness/prompts/level_3.md")).unwrap();
+    let level = std::fs::read_to_string(root().join("harness/prompts/level_3.md")).unwrap().replace("\r\n", "\n");
     assert!(omp.contains(level.trim()));
     assert!(!omp.contains("서브에이전트 기능이 없으면"));
     let plain = launch::render_prompt(&entry, &Plain).unwrap();
@@ -360,9 +393,11 @@ fn preset_overlay_from_omp_config() {
 
 /// The `PATH=` word every session command carries: the running binary's directory first, so the
 /// agents can call `ach`, which is not on the user's PATH.
+#[cfg(unix)]
 fn path_word() -> String {
     let path = harness::paths::session_path();
-    assert!(path.starts_with(&format!("{}:", harness::paths::bin_dir().display())), "{path}");
+    let first = format!("{}{}", harness::paths::bin_dir().display(), harness::paths::PATH_SEPARATOR);
+    assert!(path.starts_with(&first), "{path}");
     shell_quote(&format!("PATH={path}"))
 }
 
@@ -375,6 +410,7 @@ fn config_with(runner: &str, workspace: &str) -> Config {
     serde_json::from_value(value).unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn launch_dry_run_per_workspace() {
     let dir = scratch("launch");
@@ -400,6 +436,7 @@ fn launch_dry_run_per_workspace() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn launch_dry_run_works_whether_the_adapter_mentions_or_inlines_the_instructions() {
     // Normal path: Claude Code gets an `@` mention of the file a real launch writes.
@@ -422,6 +459,36 @@ fn launch_dry_run_works_whether_the_adapter_mentions_or_inlines_the_instructions
     let text = result["prompt_text"].as_str().unwrap();
     assert!(command.contains(text.lines().next().unwrap()), "the instructions are inline: {command}");
     assert!(!spaced.join(".harness").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn launch_dry_run_renders_a_powershell_line_on_windows() {
+    use harness::workspaces::powershell_quote as q;
+    let dir = scratch("launch-win");
+    let d = dir.display().to_string();
+    let path = harness::paths::session_path();
+    assert!(path.starts_with(&format!("{};", harness::paths::bin_dir().display())), "{path}");
+    let head = format!(
+        "Set-Location -LiteralPath {}; if ($?) {{ $env:ACH_SESSION = 'demo-contest'; $env:PATH = {}; & ",
+        q(&d),
+        q(&path)
+    );
+    for (runner, workspace, args) in [
+        ("omp", "orca", "'omp' '--cwd' {d} '--model' 'opus' '@{prompt}' "),
+        ("omp", "headless", "'omp' '--cwd' {d} '-p' '--model' 'opus' '@{prompt}' "),
+        ("claude", "headless", "'claude' '-p' '--model' 'opus' '--permission-mode' 'auto' '--' '@{prompt} "),
+    ] {
+        let mut entry = routed_entry(&dir);
+        let result = launch::launch(&mut entry, &config_with(runner, workspace), None, true).unwrap();
+        let prompt = result["prompt"].as_str().unwrap();
+        assert_eq!(Path::new(prompt), dir.join(".harness").join("launch-prompt.md"));
+        let expect = head.clone() + &args.replace("{d}", &q(&d)).replace("{prompt}", prompt);
+        let command = result["command"].as_str().unwrap();
+        assert!(command.starts_with(&expect), "{runner}/{workspace}: {command}\nexpected: {expect}");
+        assert!(command.ends_with(" }"), "{command}");
+        assert!(entry.session.is_none() && !dir.join(".harness").exists(), "a dry run writes nothing");
+    }
 }
 
 #[test]
@@ -486,6 +553,8 @@ fn install_helpers_link_and_write_without_clobbering() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "b");
 }
 
+/// The legacy per-file links came from the Python harness, which ran on Unix only.
+#[cfg(unix)]
 #[test]
 fn omp_removes_only_legacy_links_into_the_repo() {
     let base = scratch("omp-legacy");
@@ -572,6 +641,7 @@ fn scout_hours_pick_the_runs_that_search_the_web() {
 }
 
 #[test]
+#[cfg(unix)]
 fn launchd_plist() {
     let cron = Cron::parse("0 */6 * * *").unwrap();
     let xml = schedule::plist(Path::new("/opt/bin/ach"), Path::new("/repo & co"), &cron, "/usr/bin:/bin").unwrap();
@@ -632,6 +702,7 @@ fn workspace_registry() {
     assert!(runners::get("nope").is_err());
 }
 
+#[cfg(unix)]
 #[test]
 fn headless_open_and_tail() {
     let dir = scratch("headless");
@@ -670,6 +741,7 @@ fn wait_for(ws: &dyn workspaces::Workspace, handle: &str, needle: &str) -> Strin
     tail
 }
 
+#[cfg(unix)]
 #[test]
 fn headless_close_terms_the_session_group() {
     let dir = scratch("headless-close");
@@ -685,6 +757,46 @@ fn headless_close_terms_the_session_group() {
     assert!(ws.close("pid:1:/x").is_err());
     assert!(ws.close("pid:999999:/x").is_ok());
     assert_eq!(headless::pid_of("pid:42:/a:b.log").unwrap(), 42);
+    ws.remove_workspace("anything").unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn headless_open_and_tail() {
+    let dir = scratch("headless");
+    let ws = workspaces::get("headless").unwrap();
+    let argv = s(&["cmd", "/C", "cd & echo ok-headless"]);
+    let handle = ws.open(&Open { cwd: dir.clone(), title: "t", argv, workspace_id: None }).unwrap();
+    assert!(handle.starts_with("pid:"));
+    let tail = wait_for(ws, &handle, "ok-headless");
+    assert!(tail.contains("ok-headless"), "{tail}");
+    assert!(tail.contains("harness-backends"), "{tail}");
+    assert!(ws.tail("pid:1", 5).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn headless_close_stops_the_session_tree() {
+    let dir = scratch("headless-close");
+    let ws = workspaces::get("headless").unwrap();
+    // pwsh starts `ping` as a child: taskkill /T must stop both.
+    let script = "Write-Output ready; ping -n 60 127.0.0.1 | Out-Null";
+    let argv = s(&["pwsh", "-NoProfile", "-Command", script]);
+    let handle = ws.open(&Open { cwd: dir, title: "t", argv, workspace_id: None }).unwrap();
+    assert!(wait_for(ws, &handle, "ready").contains("ready"));
+    let pid = headless::pid_of(&handle).unwrap();
+    assert!(headless::start_time(pid).is_some());
+    ws.close(&handle).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while headless::start_time(pid).is_some() {
+        assert!(std::time::Instant::now() < deadline, "the session was not stopped");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Bad handles are errors; an exited pid is not.
+    assert!(ws.close("tmux:@1").is_err());
+    assert!(ws.close("pid:1:/x").is_err());
+    assert!(ws.close("pid:999999:/x").is_ok());
+    assert_eq!(headless::pid_of("pid:42/133:C:\\a\\b.log").unwrap(), 42);
     ws.remove_workspace("anything").unwrap();
 }
 
@@ -739,4 +851,11 @@ fn terminal_close_is_a_no_op() {
     let ws = workspaces::get("terminal").unwrap();
     ws.close("anything").unwrap();
     ws.remove_workspace("anything").unwrap();
+}
+
+/// Remove a link to a folder: a symlink on Unix, a junction or directory symlink on Windows.
+fn remove_link(path: &Path) {
+    if std::fs::remove_file(path).is_err() {
+        std::fs::remove_dir(path).unwrap();
+    }
 }

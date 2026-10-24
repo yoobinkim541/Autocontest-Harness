@@ -19,6 +19,11 @@ case "${1:-}" in
   -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
   *) echo "unknown option: $1" >&2; exit 2 ;;
 esac
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    echo "on Windows run: powershell -ExecutionPolicy Bypass -File scripts\\install.ps1" >&2
+    exit 1 ;;
+esac
 
 VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -n 1)"
 [ -n "$VERSION" ] || { echo "cannot read the version from $ROOT/Cargo.toml" >&2; exit 1; }

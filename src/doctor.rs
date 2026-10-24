@@ -134,7 +134,8 @@ fn platform() -> Check {
     match std::env::consts::OS {
         "macos" => ok("os", "macOS"),
         "linux" => ok("os", "Linux (launchd 스케줄러 없음: orca 또는 cron)"),
-        other => fail("os", format!("{other}는 지원하지 않는다"), "macOS나 Linux에서 돌린다"),
+        "windows" => ok("os", "Windows (스케줄러는 orca, 작업 환경은 orca·headless·terminal)"),
+        other => fail("os", format!("{other}는 지원하지 않는다"), "macOS, Linux, Windows에서 돌린다"),
     }
 }
 
@@ -149,16 +150,14 @@ fn data_files() -> Vec<Check> {
         Err(err) => out.push(fail("ledger", err.0, "data/submissions.json을 백업에서 되살리거나 고친다")),
     }
     let data = paths::data();
-    if let Ok(meta) = std::fs::metadata(&data) {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = meta.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
-            out.push(warn(
-                "data",
-                format!("{}의 권한이 {mode:o}라 다른 사용자가 읽을 수 있다", data.display()),
-                format!("chmod 700 {}", data.display()),
-            ));
-        }
+    if let Some(mode) = std::fs::metadata(&data).ok().as_ref().and_then(crate::platform::mode)
+        && mode & 0o077 != 0
+    {
+        out.push(warn(
+            "data",
+            format!("{}의 권한이 {mode:o}라 다른 사용자가 읽을 수 있다", data.display()),
+            format!("chmod 700 {}", data.display()),
+        ));
     }
     out
 }
@@ -319,7 +318,7 @@ fn memory() -> Check {
         None => warn(
             "memory",
             "쓸 수 있는 메모리를 읽지 못해 메모리 예산 없이 개수·토큰 상한만 적용한다",
-            "macOS의 vm_stat이나 Linux의 /proc/meminfo가 읽히는지 확인한다",
+            "macOS의 vm_stat, Linux의 /proc/meminfo, Windows의 GlobalMemoryStatusEx가 읽히는지 확인한다",
         ),
     }
 }

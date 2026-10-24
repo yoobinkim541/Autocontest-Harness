@@ -17,14 +17,14 @@ fn main_system_prompt_uses_the_configured_persona_file() {
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(home.join("harness")).unwrap();
     std::fs::create_dir_all(home.join("data")).unwrap();
-    std::os::unix::fs::symlink(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("harness/prompts"),
-        home.join("harness/prompts"),
+    harness::runners::link(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("harness/prompts"),
+        &home.join("harness/prompts"),
     )
     .unwrap();
     // SAFETY: the only test in this binary, set before anything reads the environment.
     unsafe { std::env::set_var("ACH_HOME", &home) };
-    let main = std::fs::read_to_string(home.join("harness/prompts/main.md")).unwrap();
+    let main = std::fs::read_to_string(home.join("harness/prompts/main.md")).unwrap().replace("\r\n", "\n");
 
     // Public defaults: no persona, no names.
     let defaults = config_with(json!({}));

@@ -26,8 +26,11 @@ pub fn playbook(kind: &str) -> &'static str {
     }
 }
 
+/// A prompt or persona file with LF line endings (a Windows checkout may have CRLF), so the
+/// rendered instructions do not mix the two.
 fn read(path: &Path) -> Result<String> {
-    std::fs::read_to_string(path).map_err(|e| Error(format!("{}: {e}", path.display())))
+    let text = std::fs::read_to_string(path).map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    Ok(text.replace("\r\n", "\n"))
 }
 
 /// Python `str.format` with named fields: `{name}` from `values`, `{{`/`}}` as literal braces.

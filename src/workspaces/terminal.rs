@@ -1,7 +1,4 @@
-use std::os::unix::process::CommandExt;
-use std::process::Command;
-
-use super::{Open, Workspace};
+use super::{Open, Workspace, command, split_env};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::registry::Entry;
@@ -25,11 +22,25 @@ impl Workspace for Terminal {
         Ok(None)
     }
 
-    /// Replaces the harness process, so it only returns on failure.
+    /// Replaces the harness process on Unix, so it only returns on failure. Windows has no exec:
+    /// the command runs on this console, Ctrl+C reaches it alone, and the harness exits with its
+    /// exit code.
     fn open(&self, spec: &Open<'_>) -> Result<String> {
-        let Some((program, args)) = spec.argv.split_first() else { crate::bail!("실행할 명령이 비었다") };
-        let err = Command::new(program).args(args).current_dir(&spec.cwd).exec();
-        Err(Error(format!("{program} 실행 실패: {err}")))
+        let program = split_env(&spec.argv).1.first().cloned().unwrap_or_default();
+        let mut command = command(&spec.argv)?;
+        command.current_dir(&spec.cwd);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let err = command.exec();
+            Err(Error(format!("{program} 실행 실패: {err}")))
+        }
+        #[cfg(windows)]
+        {
+            crate::platform::ignore_console_interrupts();
+            let status = command.status().map_err(|err| Error(format!("{program} 실행 실패: {err}")))?;
+            std::process::exit(status.code().unwrap_or(1))
+        }
     }
 
     fn tail(&self, _handle: &str, _lines: usize) -> Result<String> {

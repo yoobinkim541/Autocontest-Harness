@@ -1,12 +1,17 @@
-//! Platform support: Linux memory readings (`/proc/meminfo`, PSI) and the crontab scheduler.
-//! The real crontab is never touched; crontab I/O runs against a stub script in a temp dir.
+//! Platform support: Linux memory readings (`/proc/meminfo`, PSI), the Windows memory load, and
+//! the crontab scheduler. The real crontab is never touched; crontab I/O runs against a stub
+//! script in a temp dir (Unix only: crontab does not exist on Windows).
 
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use harness::budget;
 use harness::schedule::{self, Cron};
 
+#[cfg(unix)]
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("harness-platform-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -49,11 +54,22 @@ fn psi_maps_some_avg10_to_pressure_levels() {
     assert_eq!(budget::parse_psi(""), "unknown");
 }
 
+#[test]
+fn windows_memory_load_maps_to_pressure_levels() {
+    assert_eq!(budget::load_pressure(0), "normal");
+    assert_eq!(budget::load_pressure(84), "normal");
+    assert_eq!(budget::load_pressure(85), "warning");
+    assert_eq!(budget::load_pressure(94), "warning");
+    assert_eq!(budget::load_pressure(95), "critical");
+    assert_eq!(budget::load_pressure(100), "critical");
+}
+
 fn block(root: &str, cron: &str) -> String {
     schedule::cron_block(Path::new("/opt/bin/ach"), Path::new(root), &Cron::parse(cron).unwrap(), "/usr/bin:/bin")
         .unwrap()
 }
 
+#[cfg(unix)]
 #[test]
 fn cron_line_quotes_paths_and_escapes_percent() {
     let cron = Cron::parse("0  */6 * * *").unwrap();
@@ -135,6 +151,7 @@ fn a_user_without_a_crontab_is_an_empty_table_on_every_cron_flavour() {
 
 /// A `crontab` stand-in that keeps its table in `<dir>/table` (`-l` fails like the real one when
 /// there is none) and records every write.
+#[cfg(unix)]
 fn stub_crontab(dir: &Path) -> String {
     let script = dir.join("crontab");
     let table = dir.join("table");
@@ -151,6 +168,7 @@ fn stub_crontab(dir: &Path) -> String {
     script.display().to_string()
 }
 
+#[cfg(unix)]
 #[test]
 fn cron_install_update_remove_through_crontab_command() {
     let dir = scratch("crontab");

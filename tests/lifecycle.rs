@@ -1,10 +1,10 @@
 //! Route, launch and clean against stub `gh`/`orca` on PATH and local bare remotes: retries after
 //! failures, refusing repositories that are not ours, clean ignores, partial `clean --all`, archive
 //! containment, headless close and bounded external commands. Nothing reaches GitHub or Orca.
+//! The stubs are `sh` scripts, so the tests that need them run on Unix only (Windows resolves
+//! `gh`/`orca`/`omp` to `.exe` files).
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -15,7 +15,7 @@ use harness::clean::{self, Options};
 use harness::config::{self, Config};
 use harness::ledger::{self, Ledger};
 use harness::registry::{self, Entry, NewEntry, apply_gate, new_entry};
-use harness::workspaces::{Open, Workspace, headless::Headless, orca::Orca};
+use harness::workspaces::{Open, Workspace, headless::Headless};
 use harness::{launch, process, route};
 use serde_json::{Value, json};
 
@@ -67,6 +67,7 @@ exit 0
 "#;
 
 struct Stubs {
+    #[cfg_attr(not(unix), allow(dead_code))]
     dir: PathBuf,
 }
 
@@ -80,7 +81,7 @@ static STUBS: LazyLock<Stubs> = LazyLock::new(|| {
     for (name, body) in [("gh", GH), ("orca", ORCA), ("omp", OMP), ("tmux", TMUX)] {
         let path = dir.join(name);
         fs::write(&path, body).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        harness::platform::set_mode(&path, 0o755).unwrap();
     }
     let gitconfig = dir.join("gitconfig");
     fs::write(&gitconfig, "[user]\n\tname = Lifecycle Test\n\temail = lifecycle@example.com\n").unwrap();
@@ -91,7 +92,8 @@ static STUBS: LazyLock<Stubs> = LazyLock::new(|| {
         let file = file.unwrap().path();
         fs::copy(&file, prompts.join(file.file_name().unwrap())).unwrap();
     }
-    let path = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
+    let separator = harness::paths::PATH_SEPARATOR;
+    let path = format!("{}{separator}{}", dir.display(), std::env::var("PATH").unwrap_or_default());
     // SAFETY: runs once, inside the LazyLock, before any test of this binary reads the environment.
     unsafe {
         std::env::set_var("PATH", path);
@@ -151,10 +153,12 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+#[cfg(unix)]
 fn gh_log() -> String {
     fs::read_to_string(stubs().dir.join("gh.log")).unwrap_or_default()
 }
 
+#[cfg(unix)]
 #[test]
 fn route_failing_partway_can_be_retried_once_the_cause_is_fixed() {
     stubs();
@@ -184,6 +188,7 @@ fn route_failing_partway_can_be_retried_once_the_cause_is_fixed() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn route_refuses_existing_public_or_foreign_repository_without_pushing() {
     stubs();
@@ -235,14 +240,12 @@ fn route_appends_missing_ignores_and_headless_session_files_stay_out_of_git() {
     // What launch and a headless session write must not dirty the tree.
     fs::write(target.join(".harness/launch-prompt.md"), "prompt").unwrap();
     fs::write(target.join(".harness/omp-preset.yml"), "preset").unwrap();
-    let handle = Headless
-        .open(&Open {
-            cwd: target.clone(),
-            title: "t",
-            argv: vec!["echo".into(), "session-output".into()],
-            workspace_id: None,
-        })
-        .unwrap();
+    let echo: Vec<String> = if cfg!(windows) {
+        vec!["cmd".into(), "/C".into(), "echo session-output".into()]
+    } else {
+        vec!["echo".into(), "session-output".into()]
+    };
+    let handle = Headless.open(&Open { cwd: target.clone(), title: "t", argv: echo, workspace_id: None }).unwrap();
     for _ in 0..100 {
         if fs::read_to_string(target.join(".harness/session.log")).unwrap_or_default().contains("session-output") {
             break;
@@ -268,8 +271,10 @@ fn route_writes_a_one_line_entry_for_a_multiline_title() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn orca_worktree_is_named_after_the_folder_in_one_argument() {
+    use harness::workspaces::orca::Orca;
     stubs();
     let root = temp_dir("orca");
     let cfg = config_at(&root, json!({"orca_repo_path": root.to_string_lossy()}));
@@ -358,6 +363,8 @@ fn archive_never_copies_anything_outside_the_folder() {
     git(&folder, &["init", "-q", "-b", "main"]);
     fs::write(folder.join(".gitignore"), ".private/\n").unwrap();
     fs::write(folder.join(".private/note.md"), "receipt").unwrap();
+    // Windows needs Developer Mode for symlinks; there the traversal checks run alone.
+    #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("secret"), folder.join(".private/key")).unwrap();
 
     assert_eq!(clean::folder_relative(&folder, "a/../../x"), None);
@@ -395,7 +402,16 @@ fn trash_location_follows_the_platform() {
 #[test]
 fn headless_close_ignores_a_reused_pid_and_stops_its_own_session() {
     stubs();
-    let mut child = Command::new("sleep").arg("30").process_group(0).spawn().unwrap();
+    let mut sleeper = if cfg!(windows) {
+        let mut cmd = Command::new("pwsh");
+        cmd.args(["-NoProfile", "-Command", "Start-Sleep 30"]);
+        cmd
+    } else {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        cmd
+    };
+    let mut child = harness::platform::own_group(&mut sleeper).spawn().unwrap();
     let pid = child.id() as i32;
     // A handle recorded for another process that had this pid: stale, so nothing is signalled.
     Headless.close(&format!("pid:{pid}/Mon_Jan__1_00.00.00_2001:/tmp/x.log")).unwrap();
@@ -411,6 +427,7 @@ fn headless_close_ignores_a_reused_pid_and_stops_its_own_session() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn external_commands_are_bounded_by_their_timeout() {
     stubs();
@@ -430,6 +447,28 @@ fn external_commands_are_bounded_by_their_timeout() {
     assert!(process::output("/nonexistent/program", &[], None, process::LOCAL).unwrap_err().0.contains("실행 실패"));
 }
 
+#[cfg(windows)]
+#[test]
+fn external_commands_are_bounded_by_their_timeout() {
+    stubs();
+    let started = Instant::now();
+    let args = ["-NoProfile", "-Command", "Start-Sleep 20"];
+    let err = process::output("pwsh", &args, None, Duration::from_secs(1)).unwrap_err();
+    assert!(err.0.starts_with("pwsh -NoProfile -Command Start-Sleep 20"), "the error names the command: {err}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    // A grandchild that keeps the error pipe open does not hold the caller past the budget.
+    let started = Instant::now();
+    let line = "start /b ping -n 9 127.0.0.1 >nul & echo done";
+    let out = process::output("cmd", &["/C", line], None, Duration::from_secs(1)).unwrap();
+    assert!(out.status.success());
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    let out = process::output("cmd", &["/C", "echo %GIT_TERMINAL_PROMPT%"], None, process::LOCAL).unwrap();
+    assert_eq!(out.stdout.trim_ascii(), b"0");
+    assert!(process::output("/nonexistent/program", &[], None, process::LOCAL).unwrap_err().0.contains("실행 실패"));
+}
+
 /// A routed contest on headless (no repo, no workspace).
 fn routed(root: &Path, id: &str, folder: &str) -> (Config, Entry) {
     let cfg = config_at(root, json!({"runner": "omp", "workspace": "headless"}));
@@ -446,7 +485,8 @@ fn launch_dry_run_writes_nothing_and_shows_the_session_marker() {
     let target = cfg.contests_root().join("Dry-Run");
     let before = git(&target, &["status", "--porcelain", "--ignored"]);
     let result = launch::launch(&mut e, &cfg, None, true).unwrap();
-    assert!(result["command"].as_str().unwrap().contains("env ACH_SESSION=manual-dry "), "{result}");
+    let marker = if cfg!(windows) { "$env:ACH_SESSION = 'manual-dry';" } else { "env ACH_SESSION=manual-dry " };
+    assert!(result["command"].as_str().unwrap().contains(marker), "{result}");
     assert!(!result["prompt_text"].as_str().unwrap_or_default().is_empty());
     assert_eq!(result["warnings"], json!([]));
     assert!(!target.join(".harness/launch-prompt.md").exists());
@@ -455,6 +495,7 @@ fn launch_dry_run_writes_nothing_and_shows_the_session_marker() {
     fs::remove_dir_all(&root).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn launched_session_carries_its_contest_id_and_the_main_session_does_not() {
     stubs();

@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 pub const MARKER: &str = "harness/prompts/launch.md";
 
 static BINARY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
-    let exe = std::env::current_exe().and_then(|exe| exe.canonicalize()).ok();
+    let exe = std::env::current_exe().and_then(|exe| canonicalize(&exe)).ok();
     exe.and_then(|exe| exe.ancestors().skip(1).find(|dir| checkout_ok(dir)).map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 });
@@ -49,33 +49,59 @@ pub fn checked_root() -> crate::error::Result<PathBuf> {
 /// harness starts get it through [`session_path`].
 pub fn bin_dir() -> PathBuf {
     std::env::current_exe()
-        .and_then(|exe| exe.canonicalize())
+        .and_then(|exe| canonicalize(&exe))
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| root().join("bin"))
 }
 
+/// The `ach` executable in [`bin_dir`] (`ach.exe` on Windows).
+pub fn ach_exe() -> PathBuf {
+    bin_dir().join(format!("ach{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Separator between `PATH` entries.
+pub const PATH_SEPARATOR: char = if cfg!(windows) { ';' } else { ':' };
+
 /// `PATH` for a session the harness starts: [`bin_dir`] first, so its agents can call `ach`.
 pub fn session_path() -> String {
     let bin = bin_dir().display().to_string();
     match std::env::var("PATH") {
-        Ok(path) if path.split(':').next() == Some(bin.as_str()) => path,
-        Ok(path) if !path.is_empty() => format!("{bin}:{path}"),
+        Ok(path) if path.split(PATH_SEPARATOR).next() == Some(bin.as_str()) => path,
+        Ok(path) if !path.is_empty() => format!("{bin}{PATH_SEPARATOR}{path}"),
         _ => bin,
     }
 }
 
+/// `HOME`, or on Windows `USERPROFILE` (shells there rarely set `HOME`).
 pub fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty());
+    let home = if cfg!(windows) { home.or_else(|| std::env::var_os("USERPROFILE")) } else { home };
+    home.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// `~` and `~/...` expand to the home directory; everything else is taken as is.
+/// `~` and `~/...` (on Windows also `~\...`) expand to the home directory; everything else is
+/// taken as is.
 pub fn expand(path: &str) -> PathBuf {
+    let separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
     match path.strip_prefix('~') {
         Some("") => home(),
-        Some(rest) if rest.starts_with('/') => home().join(&rest[1..]),
+        Some(rest) if rest.starts_with(separator) => home().join(&rest[1..]),
         _ => PathBuf::from(path),
     }
+}
+
+/// [`std::fs::canonicalize`] without the `\\?\` prefix Windows puts on drive paths, which PATH
+/// entries, prompts and other programs do not take.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    let path = std::fs::canonicalize(path)?;
+    #[cfg(windows)]
+    if let Some(rest) = path.to_str().and_then(|p| p.strip_prefix(r"\\?\"))
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return Ok(PathBuf::from(rest));
+    }
+    Ok(path)
 }
 
 pub fn data() -> PathBuf {

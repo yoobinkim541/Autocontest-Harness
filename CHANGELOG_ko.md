@@ -6,6 +6,13 @@
 
 ## 미배포
 
+- **추가**:
+  - **Windows 지원**(x64, `scripts/install.ps1`이 소스에서 빌드해 `bin\ach.exe`에 설치한다). `orca` 작업 환경은 공모전 세션과 메인 세션을 PowerShell(`pwsh.exe`가 있으면 그것, 없으면 `powershell.exe`)을 쓰는 Orca 터미널에 연다. 터미널에 입력하는 줄은 `Set-Location -LiteralPath <폴더>; if ($?) { $env:ACH_SESSION = …; $env:PATH = …; & <러너> … }`이고 낱말마다 작은따옴표로 감싼다. `orca` 스케줄러는 macOS와 같이 동작한다. `headless`는 콘솔 없는 프로세스 그룹에서 세션을 돌리고, `ach peek`과 종료는 그 프로세스의 생성 시각과 `taskkill /T`를 쓴다. `terminal`(`ach chat`)은 러너가 끝날 때까지 기다렸다가 그 종료 코드로 끝난다. 메모리 예산과 압박은 `GlobalMemoryStatusEx`에서 읽는다(메모리 사용률 85% 이상 `warning`, 95% 이상 `critical`). Windows에는 `launchd`, `cron`, `tmux`가 없고, `ach schedule install --scheduler cron`은 거절한다.
+- **수정**:
+  - omp 확장이 클론의 `bin/`을 어느 OS에서나 `:`로 `PATH`에 붙여 Windows에서 `PATH`가 깨졌다. 플랫폼 구분자를 쓰고 `ach.exe`를 찾는다.
+  - 줄 끝이 CRLF인 에이전트 파일(`core.autocrlf`를 켠 Windows 클론)을 frontmatter가 없다고 거절했다.
+  - 러너·작업 환경이 있는지 보는 `which`가 플랫폼 구분자로 `PATH`를 나누고 Windows에서는 `<이름>.exe`를 찾는다. 세션 `PATH`도 Windows에서는 `;`로 잇는다. 에이전트에게 보이거나 `PATH`·Orca automation 프롬프트에 들어가는 정규 경로에서 Windows의 `\\?\` 접두사를 뗀다.
+  - Windows에서 줄 끝이 CRLF인 지시문·페르소나 파일을 LF로 읽어, 만들어지는 지시문에 두 줄 끝이 섞이지 않는다. `ach check`는 다른 OS처럼 `/`로 이은 파일 경로를 알린다. `ach install`은 심볼릭 링크 권한이 없으면 폴더를 junction으로 잇는다.
 - **바뀜**:
   - 보고서·제안서·논문·신청서 등 페이지가 있는 제출 문서는 렌더된 모든 페이지를 비전으로 직접 확인해야 한다. 메타데이터·서식 설정값·추출 텍스트·OCR·이미지 생성 성공으로 전 페이지 검수를 대신하지 않는다.
   - 작성 플레이북, 실행/HQ 지시, ContestEditor, ContestJudge, 제출 템플릿에 파일 해시와 페이지별 검수 근거를 요구한다. 수정·서명·재저장·변환 뒤에는 이전 시각 검수를 무효로 하고 전 페이지를 재검수한다. 최종본의 미검수 페이지가 있으면 ContestJudge가 거절한다. `ach`의 이미지 판독 기능이 아니라 에이전트 검수 지침이다.

@@ -15,7 +15,7 @@
 
 ## 1. 설치와 뼈대
 
-1. `bin/ach --version`을 실행한다. 명령이 없거나 실패하면 저장소 루트에서 `scripts/install.sh`를 실행한다(배포 바이너리를 받아 체크섬을 확인한다. Rust가 있고 사용자가 원하면 `scripts/install.sh --from-source`).
+1. `bin/ach --version`을 실행한다. 명령이 없거나 실패하면 저장소 루트에서 `scripts/install.sh`를 실행한다(배포 바이너리를 받아 체크섬을 확인한다. Rust가 있고 사용자가 원하면 `scripts/install.sh --from-source`). Windows에서는 `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`(cargo로 빌드해 `bin\ach.exe`에 둔다)을 쓴다.
 2. `bin/ach init --json`을 실행한다. `data/`, `data/config.json`, `data/profile.md`를 커밋된 예시에서 만들고(이미 있으면 그대로 둔다) `bin/ach doctor` 결과를 함께 돌려준다. `checks`에서 `fail`과 `warn` 항목을 기억해 두고, 아래 단계에서 해결한다.
 
 ## 2. 사용자에게 묻기
@@ -27,14 +27,14 @@
 | 에이전트 하네스 | `runner` | 이 절차를 돌리는 하네스(omp면 `omp`, Claude Code면 `claude`) | 공모전 세션을 다른 하네스로 돌리고 싶을 때. 코어에 어댑터가 있는 이름만 받는다 |
 | 공모전 폴더 | `contests_root` | `~/contests` | 공모전마다 폴더가 생길 곳을 따로 두고 싶을 때 |
 | GitHub 저장소 위치 | `github_org` | `""`(gh에 로그인한 계정, `gh auth status`로 확인해 보여 준다) | 조직에 비공개 저장소를 모으고 싶을 때 |
-| 작업 환경 | `workspace` | Orca 앱이 있으면 `orca`, 없으면 `tmux` | 화면 없이 돌릴 때 `headless`(세션 안에서 답할 수 없다) |
-| Orca 프로젝트 폴더(`orca`일 때) | `orca_repo_path` | 비워 두기(`contests_root`와 같다) | 다른 폴더를 Orca 프로젝트로 쓸 때. Orca에 없으면 `orca repo add --path <폴더>` |
+| 작업 환경 | `workspace` | Orca 앱이 있으면 `orca`, 없으면 `tmux`(Windows는 `headless`) | 화면 없이 돌릴 때 `headless`(세션 안에서 답할 수 없다) |
+| Orca 프로젝트 폴더(`orca`일 때) | `orca_repo_path` | 비워 두기(`contests_root`와 같다) | 다른 폴더를 Orca 프로젝트로 쓸 때. Orca에 없으면 `orca repo add --path <폴더>`. `orca repo add`는 git 저장소만 받으므로, 공모전 폴더가 git 저장소가 아니면 세션 worktree만 담는 빈 git 저장소를 만들어 이 값으로 둔다 |
 | 정기 실행 시각 | `schedule.cron` | `0 */6 * * *`(6시간마다) | 예: 아침·저녁 9시는 `0 9,21 * * *` |
-| 정기 실행을 띄우는 것 | `schedule.scheduler` | macOS+Orca는 `orca`, 그 밖의 macOS는 `launchd`, Linux는 `cron` | |
+| 정기 실행을 띄우는 것 | `schedule.scheduler` | macOS+Orca는 `orca`, 그 밖의 macOS는 `launchd`, Linux는 `cron`, Windows는 `orca` | |
 | 웹 검색까지 하는 시간 | `schedule.scout_hours` | `0-5` | 비우면 웹 검색을 하지 않는다 |
 | 통과한 공모전 자동 실행 | `auto_launch` | `false` | 게이트 판정을 몇 회차 확인한 뒤 `true` |
 | 동시 실행 상한 | `max_running` | `6` | 메모리가 작으면 줄인다 |
-| 앱 몫으로 남길 메모리(GB) | `ram_reserve_gb` | `8` | |
+| 앱 몫으로 남길 메모리(GB) | `ram_reserve_gb` | `8` | 메모리가 16GB 이하인 기기는 1~2로 줄인다(그대로 두면 세션을 띄울 예산이 남지 않는다) |
 | 모델 | 5단계 | 러너 기본값 | |
 | 메인 세션 페르소나(선택) | `persona.enabled` 등 | `false` | 메인 세션 말투를 정하고 싶을 때. 공모전 결과물에는 절대 들어가지 않는다 |
 
@@ -63,7 +63,7 @@ bin/ach config get            # 적용된 전체 설정
   - 참가 자격 절: 참가 형태(개인·팀), 학생 여부, 학교·전공·과정·학년, 출생 연도, 거주 지역, 국적, 강점, 피하는 조건을 한 번에 묻고, 받은 답을 그대로 `## 참가 자격` 절에 쓴다(`write`나 편집 도구). 예시 값(`예/아니오` 같은 자리 표시)은 남기지 않는다.
   - 제출용 개인정보 절: 먼저 "대화로 준 값은 모델 제공자와 이 세션 기록에 남는다. 그래서 이 절은 직접 쓰기를 권한다"라고 알린다. 사용자가 그래도 대화로 주면 받은 값만 그대로 그 절에 쓴다.
   - 서명·도장·재학증명서 같은 파일은 사용자가 `data/profile/`에 직접 두고, 프로필에는 경로만 적는다.
-- **공통**: 개인정보 값을 화면에 다시 읊지 않는다("적었다"고만 답한다). 다른 파일, 커밋, 로그, `--note`, 메모에 옮기지 않는다. 쓴 뒤 `chmod 600 data/profile.md`. 이 단계 밖에서는 에이전트가 이 파일을 고치지 않는다.
+- **공통**: 개인정보 값을 화면에 다시 읊지 않는다("적었다"고만 답한다). 다른 파일, 커밋, 로그, `--note`, 메모에 옮기지 않는다. 쓴 뒤 `chmod 600 data/profile.md`(Windows에서는 하지 않는다. 파일 권한 대신 사용자 폴더의 ACL이 막는다). 이 단계 밖에서는 에이전트가 이 파일을 고치지 않는다.
 
 `bin/ach doctor`의 `profile` 항목(권한, 남은 예시 값)으로 확인한다.
 

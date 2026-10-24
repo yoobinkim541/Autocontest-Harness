@@ -2,7 +2,6 @@
 //! schema versions and file modes, lock-free route/launch storage, and human approval.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -405,7 +404,7 @@ fn profile_show_needs_an_approved_submission_for_that_contest() {
     let home = home("profile");
     let profile = home.join("data/profile.md");
     fs::write(&profile, "## 참가 자격\n- 학생 여부: 예\n\n## 제출용 개인정보\n- 이름: 홍길동\n").unwrap();
-    fs::set_permissions(&profile, fs::Permissions::from_mode(0o600)).unwrap();
+    harness::platform::set_mode(&profile, 0o600).unwrap();
     put(&home, vec![at_state("p-1", "awaiting_approval")]);
     assert_eq!(code(&harness(&home, &["profile", "show"])), 2, "--for is required");
     assert_eq!(code(&harness(&home, &["profile", "show", "--for", "p-1"])), 1, "not approved yet");
@@ -419,13 +418,14 @@ fn profile_show_needs_an_approved_submission_for_that_contest() {
     let own = harness_cmd(&home, &["profile", "show", "--for", "p-1"]).env("ACH_SESSION", "p-1").output().unwrap();
     assert_eq!(code(&own), 0, "{}", stderr(&own));
 
-    // Warnings: readable by others, placeholders left in.
+    // Warnings: readable by others (Unix modes only), placeholders left in.
     fs::write(&profile, "## 참가 자격\n- 학생 여부: 예/아니오\n").unwrap();
-    fs::set_permissions(&profile, fs::Permissions::from_mode(0o644)).unwrap();
+    harness::platform::set_mode(&profile, 0o644).unwrap();
     let out = harness(&home, &["profile", "eligibility"]);
     assert_eq!(code(&out), 0);
     let err = stderr(&out);
-    assert!(err.contains("chmod 600") && err.contains("예/아니오"), "{err}");
+    assert!(err.contains("예/아니오"), "{err}");
+    assert_eq!(err.contains("chmod 600"), cfg!(unix), "{err}");
     let _ = fs::remove_dir_all(&home);
 }
 
@@ -526,17 +526,21 @@ fn data_files_are_private_and_crash_leftovers_are_removed() {
         Ok(())
     })
     .unwrap();
-    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode(&data), 0o700);
-    assert_eq!(mode(&reg), 0o600);
-    assert_eq!(mode(&data.join("registry.lock")), 0o600);
+    let mode_is = |p: &Path, want: u32| {
+        if let Some(mode) = harness::platform::mode(&fs::metadata(p).unwrap()) {
+            assert_eq!(mode, want, "{}", p.display());
+        }
+    };
+    mode_is(&data, 0o700);
+    mode_is(&reg, 0o600);
+    mode_is(&data.join("registry.lock"), 0o600);
     fs::write(&stale, "{}").unwrap();
     fs::write(data.join(".registry-notapid.json"), "{}").unwrap();
     registry::write_at(&reg, |_| Ok(())).unwrap();
     assert!(!stale.exists(), "a dead writer's temp file is removed under the lock");
     assert!(data.join(".registry-notapid.json").exists(), "only `.registry-<pid>.json` names are touched");
     ledger::write_at(&data.join("submissions.json"), |_| Ok(())).unwrap();
-    assert_eq!(mode(&data.join("submissions.json")), 0o600);
+    mode_is(&data.join("submissions.json"), 0o600);
     let leftovers: Vec<String> = fs::read_dir(&data)
         .unwrap()
         .filter_map(|e| e.ok()?.file_name().into_string().ok())

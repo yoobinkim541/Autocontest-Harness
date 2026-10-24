@@ -55,12 +55,12 @@ Autocontest-Harness는 접수 중인 공모전을 찾고 참가 자격을 확인
 
 전제 조건:
 
-- macOS 또는 Linux. Windows는 지원하지 않는다.
+- macOS, Linux, Windows(x64). Windows에서 작업 환경은 `orca`나 `headless`, 스케줄러는 `orca`다(tmux, launchd, cron 없음).
 - 커밋 작성자 정보(`git config --global user.name`과 `user.email`)를 설정한 `git`. `route`가 공모전 폴더마다 첫 커밋을 만든다.
 - GitHub CLI `gh`: `github_org`(기본값은 자기 계정)에 private 저장소를 만들 수 있는 계정으로 로그인해 둔다(`gh auth login`).
 - `PATH`에 [omp](https://github.com/can1357/oh-my-pi) 또는 [Claude Code](https://github.com/anthropics/claude-code)(`claude`). 코어에 어댑터가 있는 에이전트 하네스다. 공모전 세션을 처음부터 끝까지 돌려 본 것은 omp다. 다른 하네스는 어댑터부터 있어야 한다([러너 어댑터 추가](#러너-어댑터-추가) 참고).
 - 공모전 세션의 작업 환경: [Orca](https://github.com/stablyai/orca)와 `orca` CLI(기본값) 또는 `tmux`. `headless`는 따로 필요한 것이 없다.
-- Rust 1.89 이상(`cargo`). 소스에서 빌드할 때만 필요하다.
+- Rust 1.89 이상(`cargo`). 소스에서 빌드할 때만 필요하다. Windows는 미리 빌드한 바이너리가 없어 늘 필요하고, MSVC 빌드 도구도 있어야 한다.
 
 ### 1. 설치
 
@@ -69,6 +69,8 @@ git clone https://github.com/FMsongX2/Autocontest-Harness.git ~/contests/Contest
 cd ~/contests/Contest-Harness
 scripts/install.sh
 ```
+
+Windows에서는 클론에서 `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`을 대신 실행한다. cargo로 빌드해 `bin\ach.exe`에 설치한다.
 
 스크립트는 하네스 코어를 클론의 `bin/ach`에 둔다. 이 플랫폼용 릴리스 바이너리를 릴리스의 `SHA256SUMS`로 확인해 받고, 맞는 것이 없으면 소스에서 빌드한다. `PATH`는 건드리지 않는다. `ach`는 사용자가 아니라 에이전트가 부르기 때문이다([`ach` 바이너리](docs/reference_ko.md#ach-바이너리) 참고).
 
@@ -80,7 +82,7 @@ scripts/install.sh
 
 에이전트는 [INIT.md](INIT.md)를 따른다. 설정을 항목마다 추천 기본값을 붙여 한 번에 묻고, 사용자 정보(참가 자격과 제출 양식에 들어갈 정보, [사용자 정보](docs/reference_ko.md#사용자-정보) 참고) 채우기를 돕고, 원하면 모델을 고르고, 쓰는 에이전트 하네스에 에이전트와 스킬을 설치하고, 원하면 정기 실행을 등록한 뒤, 실패가 없어질 때까지 설치 점검을 되풀이한다. omp에서는 `/contest-init`이 같은 절차를 시작한다.
 
-기본 작업 환경 `orca`는 공모전 작업 공간을 `orca_repo_path`(기본값은 `contests_root`, 그 기본값은 `~/contests`)의 worktree로 만든다. 그래서 이 폴더는 Orca에 추가된 git 저장소여야 한다. Orca 없이 돌리려면 설정할 때 `tmux`나 `headless`를 고른다.
+기본 작업 환경 `orca`는 공모전 작업 공간을 `orca_repo_path`(기본값은 `contests_root`, 그 기본값은 `~/contests`)의 worktree로 만든다. 그래서 이 폴더는 Orca에 추가된 git 저장소여야 한다. Orca 없이 돌리려면 설정할 때 `tmux`나 `headless`를 고른다. 공모전 폴더가 git 저장소가 아니면 세션 worktree만 담는 작은 git 저장소(`git init`, 커밋 하나, `orca repo add --path <그 폴더>`)를 `orca_repo_path`로 둔다. 세션은 그래도 공모전 폴더에서 돈다. Windows에서 세션을 여는 Orca 터미널은 PowerShell이다.
 
 ### 3. 쓰기
 
@@ -104,6 +106,8 @@ bin/ach chat
 git pull && scripts/install.sh
 bin/ach doctor
 ```
+
+Windows에서는 `scripts/install.sh` 대신 `scripts\install.ps1`을 실행한다.
 
 클론이 바이너리를 빌드한 커밋보다 앞으로 나갔으면 `ach doctor`가 경고한다. 그 뒤 커밋이 문서(README 파일, `CONTRIBUTING`, `SECURITY`, `CHANGELOG`, `docs/`, `references/`, `LICENSE`)만 바꿨으면 경고하지 않는다. 릴리스마다 바뀐 점과 옮길 절차는 [CHANGELOG_ko.md](CHANGELOG_ko.md)에 있다.
 
@@ -269,8 +273,8 @@ ach config set agent_models.ContestJudge null                # 다음 ach instal
 - **headless 세션에는 답할 수 없다.** `headless`는 TTY 없이 러너의 한 번 실행 명령을 돌린다. 세션 안에서 콘셉트나 계획 승인이 필요한 공모전은 `orca`나 `tmux`를 쓴다.
 - **페르소나 검사는 텍스트만 읽는다.** HWP·PDF 같은 이진 형식의 안쪽은 보지 못하고, 데이터·빌드 폴더와 4MB 넘는 파일은 건너뛴다. 최종 결과물의 텍스트는 `ContestJudge`가 따로 확인한다.
 - **외부 에이전트.** `ArticleResearcher`를 언급하지만 이 저장소에는 들어 있지 않다.
-- **macOS와 Linux만 지원한다.** Windows는 지원하지 않는다. `launchd` 스케줄러는 macOS 전용이고, Linux에서는 `orca`나 `cron`을 쓴다.
-- **미리 빌드한 바이너리는 네 대상뿐이다.** `scripts/install.sh`가 macOS(Apple silicon, Intel)와 Linux(x86_64, aarch64, musl)용을 내려받고, 그 밖에서는 소스에서 빌드한다. `ACH_HOME`을 지정하지 않으면 바이너리는 자기가 속한 클론의 파일을 읽는다.
+- **Windows에서는 백엔드가 적다.** `launchd` 스케줄러는 macOS 전용이고, Linux에서는 `orca`나 `cron`을 쓴다. Windows에서는 `orca` 스케줄러와 `orca`, `headless`, `terminal` 작업 환경만 되고, Orca 터미널은 PowerShell로 돈다. Windows에서는 `data/` 아래 파일에 0600·0700 권한을 붙이지 않고, 사용자 프로필 폴더의 ACL이 다른 사용자를 막는다. 공모전 세션은 Windows에서 omp로 Orca에서 돌려 봤다.
+- **미리 빌드한 바이너리는 네 대상뿐이다.** `scripts/install.sh`가 macOS(Apple silicon, Intel)와 Linux(x86_64, aarch64, musl)용을 내려받고, 그 밖에서는 소스에서 빌드한다. Windows는 `scripts/install.ps1`로 빌드한다. `ACH_HOME`을 지정하지 않으면 바이너리는 자기가 속한 클론의 파일을 읽는다.
 - **승인은 안전장치이지 샌드박스가 아니다.** `ACH_SESSION`을 지운 에이전트는 `ach approve`를 실행할 수 있다. [SECURITY_ko.md](SECURITY_ko.md) 참고.
 - **수집기는 깨질 수 있다.** 수집기는 실제 사이트 구조와 내부 API를 읽는다. 사이트가 바뀌면 그 수집기가 0건을 돌려주고, 이것은 오류로 보고되며 다른 출처는 계속 수집된다.
 - **마감은 근사값일 수 있다.** 날짜만 있는 마감은 23:59 KST로 두고, 상세 페이지가 막힌 Devpost 항목에는 시간대 미확인 표시가 붙는다. 게이트가 공식 공고에서 마감을 다시 확인한다.

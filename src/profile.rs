@@ -57,13 +57,11 @@ const PLACEHOLDERS: &[&str] = &["예/아니오", "학부 / 석사 / 박사", "�
 /// read it (the profile holds personal details; it should be 0600), and eligibility lines that
 /// still carry the example placeholders (ContestGate would take them as facts).
 pub fn warnings(path: &Path, text: &str) -> Vec<String> {
-    use std::os::unix::fs::PermissionsExt;
     let mut out = Vec::new();
-    if let Ok(meta) = fs::metadata(path) {
-        let mode = meta.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
-            out.push(format!("프로필 권한이 {mode:o}라 다른 사용자도 읽을 수 있다: chmod 600 {}", path.display()));
-        }
+    if let Some(mode) = fs::metadata(path).ok().as_ref().and_then(crate::platform::mode)
+        && mode & 0o077 != 0
+    {
+        out.push(format!("프로필 권한이 {mode:o}라 다른 사용자도 읽을 수 있다: chmod 600 {}", path.display()));
     }
     let body = section(text, ELIGIBILITY).unwrap_or_default();
     let unfilled: Vec<&str> =

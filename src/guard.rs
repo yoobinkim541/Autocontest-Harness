@@ -80,7 +80,9 @@ fn walk(root: &Path, dir: &Path, terms: &[String], findings: &mut Vec<Finding>) 
                 continue; // binary
             }
             let Ok(text) = String::from_utf8(bytes) else { continue };
-            let file = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+            // `/`-separated on every OS, like the paths git and the agents use.
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            let file = relative.iter().map(|c| c.to_string_lossy()).collect::<Vec<_>>().join("/");
             scan_text(&file, &text, terms, findings);
         }
     }

@@ -6,6 +6,15 @@ All notable changes. Versions follow [Semantic Versioning](https://semver.org/);
 
 ## Unreleased
 
+### Added
+- **Windows support** (x64, built from source with `scripts/install.ps1` into `bin\ach.exe`). The `orca` workspace opens contest and main sessions in Orca terminals running PowerShell (`pwsh.exe` when installed, else `powershell.exe`): the typed line is `Set-Location -LiteralPath <folder>; if ($?) { $env:ACH_SESSION = …; $env:PATH = …; & <runner> … }` with every word single-quoted. The `orca` scheduler works as on macOS. `headless` runs the session in a console-less process group and `ach peek`/`close` use its creation time and `taskkill /T`; `terminal` (`ach chat`) waits for the runner and exits with its code. Memory budget and pressure come from `GlobalMemoryStatusEx` (memory load ≥ 85% `warning`, ≥ 95% `critical`). `launchd`, `cron` and `tmux` are not available on Windows; `ach schedule install --scheduler cron` refuses there.
+
+### Fixed
+- The omp extension put the clone's `bin/` on `PATH` with `:` on every OS, which broke `PATH` on Windows; it uses the platform delimiter and looks for `ach.exe` there.
+- Agent files with CRLF line endings (a Windows checkout with `core.autocrlf`) were rejected as having no frontmatter.
+- `which` (runner and workspace availability) splits `PATH` with the platform separator and looks for `<name>.exe` on Windows; the session `PATH` uses `;` there. Canonical paths shown to agents, put on `PATH` or written into the Orca automation prompt drop Windows' `\\?\` prefix.
+- On Windows: prompt and persona files with CRLF line endings are read as LF, so rendered instructions do not mix the two; `ach check` reports files with `/` separators as on other systems; `ach install` links folders with a junction when symlinks need privileges the user lacks.
+
 ### Changed
 - Paginated report, proposal, paper, and application deliverables require direct visual inspection of every rendered page. Metadata, style values, extracted text, OCR, and successful image generation do not replace page-by-page inspection.
 - Authoring playbooks, launch/HQ instructions, ContestEditor, ContestJudge, and submission templates require file hashes and page-specific evidence; edits, signing, saving, or conversion invalidate the previous visual review. ContestJudge rejects incomplete final-page inspection. This is an agent-review requirement, not image analysis performed by `ach`.

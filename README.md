@@ -58,12 +58,12 @@ Registry states: `discovered → gate_pass | rejected | hold → routed → runn
 
 Prerequisites:
 
-- macOS or Linux. Windows is not supported.
+- macOS, Linux, or Windows (x64). On Windows the workspace is `orca` or `headless` and the scheduler is `orca` (no tmux, launchd or cron).
 - `git` with a commit identity (`git config --global user.name` and `user.email`). `route` makes the first commit in every contest folder.
 - The GitHub CLI `gh`, signed in (`gh auth login`) to an account that can create private repositories in your `github_org` (by default, your own account).
 - [omp](https://github.com/can1357/oh-my-pi) or [Claude Code](https://github.com/anthropics/claude-code) (`claude`) on `PATH`, the agent harnesses the core has adapters for. omp is the one that has run contest sessions end to end. Another harness needs an adapter first (see [Adding a runner adapter](#adding-a-runner-adapter)).
 - A workspace backend for contest sessions: [Orca](https://github.com/stablyai/orca) with its `orca` CLI (the default), or `tmux`. `headless` needs nothing extra.
-- Rust 1.89 or later (`cargo`), only if you build from source.
+- Rust 1.89 or later (`cargo`), only if you build from source. On Windows always: there is no prebuilt Windows binary, so you also need the MSVC build tools.
 
 ### 1. Install
 
@@ -72,6 +72,8 @@ git clone https://github.com/FMsongX2/Autocontest-Harness.git ~/contests/Contest
 cd ~/contests/Contest-Harness
 scripts/install.sh
 ```
+
+On Windows, run `powershell -ExecutionPolicy Bypass -File scripts\install.ps1` in the clone instead. It builds with cargo and installs `bin\ach.exe`.
 
 The script puts the harness core at `bin/ach` in the clone: the release binary for your platform, checked against the release's `SHA256SUMS`, or a source build when none fits. It does not change your `PATH`, because you do not call `ach`; the agents do (see [The `ach` binary](docs/reference.md#the-ach-binary)).
 
@@ -83,7 +85,7 @@ Open your coding agent (omp or Claude Code) in the clone and say:
 
 The agent follows [INIT.md](INIT.md). It asks you the settings in one batch with a recommended default for each, helps you fill in your profile (eligibility facts and the details submission forms ask for; see [User profile](docs/reference.md#user-profile)), picks models if you want, installs the agents and skill for your agent harness, installs the scheduled run if you want one, and repeats the setup check until nothing fails. In omp, `/contest-init` starts the same procedure.
 
-With the default `orca` workspace, contest workspaces are worktrees of `orca_repo_path` (default: `contests_root`, which defaults to `~/contests`), so that directory must be a git repository added to Orca. Pick `tmux` or `headless` during setup to run without Orca.
+With the default `orca` workspace, contest workspaces are worktrees of `orca_repo_path` (default: `contests_root`, which defaults to `~/contests`), so that directory must be a git repository added to Orca. Pick `tmux` or `headless` during setup to run without Orca. If your contest folders are not a git repository, point `orca_repo_path` at a small git repository that only holds the session worktrees (`git init`, one commit, `orca repo add --path <it>`); sessions still run in the contest folders. On Windows, Orca terminals for the sessions run PowerShell.
 
 ### 3. Use
 
@@ -107,6 +109,8 @@ Contest sessions open in Orca or tmux, where you can also answer them directly. 
 git pull && scripts/install.sh
 bin/ach doctor
 ```
+
+On Windows, run `scripts\install.ps1` instead of `scripts/install.sh`.
 
 `ach doctor` warns when the checkout has moved past the commit the binary was built from, unless the commits since then change documentation only (the README files, `CONTRIBUTING`, `SECURITY`, `CHANGELOG`, `docs/`, `references/`, `LICENSE`). [CHANGELOG.md](CHANGELOG.md) lists what changed in each release and any migration steps.
 
@@ -272,8 +276,8 @@ Personal state stays on your machine. `.gitignore` excludes `data/config.json`, 
 - **Headless sessions cannot be answered.** `headless` runs the runner's one-shot command with no TTY. Use `orca` or `tmux` for contests that need concept or plan approval in the session.
 - **The persona guard reads text only.** It does not look inside HWP, PDF, or other binary formats, and it skips data and build directories and files over 4 MB. `ContestJudge` checks the text of the final deliverables separately.
 - **External agents.** `ArticleResearcher` is referenced but not included.
-- **macOS and Linux only.** Windows is not supported. The `launchd` scheduler is macOS-only; on Linux, use `orca` or `cron`.
-- **Prebuilt binaries for four targets.** `scripts/install.sh` downloads them for macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64, musl); anything else builds from source. The binary reads files from the checkout it belongs to unless `ACH_HOME` is set.
+- **Windows has fewer backends.** The `launchd` scheduler is macOS-only; on Linux, use `orca` or `cron`. On Windows only the `orca` scheduler and the `orca`, `headless` and `terminal` workspaces work; Orca terminals there run PowerShell. Files under `data/` get no 0600/0700 modes on Windows; the user profile's ACL is what keeps them private. Contest sessions have run on Windows with omp in Orca.
+- **Prebuilt binaries for four targets.** `scripts/install.sh` downloads them for macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64, musl); anything else builds from source, Windows with `scripts/install.ps1`. The binary reads files from the checkout it belongs to unless `ACH_HOME` is set.
 - **Approval is a safety catch, not a sandbox.** An agent that clears `ACH_SESSION` can run `ach approve`. See [SECURITY.md](SECURITY.md).
 - **Scrapers break.** Collectors read live site structures and internal APIs. When a site changes, its collector returns zero items, which is reported as an error while the other sources keep going.
 - **Approximate deadlines.** Date-only deadlines are set to 23:59 KST, and blocked Devpost detail pages are marked as having an unconfirmed time zone. The gate re-checks deadlines against the official notice.

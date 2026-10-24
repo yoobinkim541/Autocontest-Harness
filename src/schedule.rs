@@ -1,6 +1,6 @@
 //! Scheduled runs: the `schedule` config (cron, scheduler, ContestScout hours), `ach autorun`,
-//! and the three schedulers that start a run: an Orca automation, a macOS launchd job, or a
-//! crontab block (macOS and Linux).
+//! and the three schedulers that start a run: an Orca automation (every OS), a macOS launchd job,
+//! or a crontab block (macOS and Linux).
 
 use std::fs::File;
 use std::io::Write;
@@ -27,6 +27,7 @@ const CRON_TAG: &str = "autocontest-harness";
 /// launchd needs one calendar entry per value combination; more than this is not a sensible schedule.
 const MAX_CALENDAR: usize = 1000;
 
+#[cfg(unix)]
 unsafe extern "C" {
     fn getuid() -> u32;
 }
@@ -226,8 +227,7 @@ pub fn autorun(config: &Config) -> Result<Value> {
     let log = logs.join(format!("autorun-{stamp}.log"));
     let out = File::create(&log)?;
     let err = out.try_clone()?;
-    let status = Command::new(&argv[0])
-        .args(&argv[1..])
+    let status = crate::workspaces::command(&argv)?
         .current_dir(&root)
         .stdin(Stdio::null())
         .stdout(out)
@@ -248,7 +248,7 @@ fn scheduler_name<'a>(config: &'a Config, scheduler: Option<&'a str>) -> Result<
 /// This checkout's root as the schedulers record it (canonical when possible).
 fn checkout_root() -> PathBuf {
     let root = paths::root();
-    std::fs::canonicalize(&root).unwrap_or(root)
+    paths::canonicalize(&root).unwrap_or(root)
 }
 
 /// Install the scheduled run on `scheduler` (default `schedule.scheduler`) with `schedule.cron`,
@@ -299,7 +299,7 @@ pub fn status(config: &Config) -> Result<Value> {
     let cron = Cron::parse(&schedule.cron);
     let wanted = cron.as_ref().map(|c| c.text.clone()).unwrap_or_default();
     let agent = runners::get(&config.runner).ok().and_then(|r| r.orca_agent());
-    let prompt = automation_file().ok().map(|file| orca_prompt(&file, &ach_path()));
+    let prompt = automation_file().ok().map(|file| orca_prompt(&file, &paths::ach_exe()));
     let root = checkout_root();
     let mut launchd = launchd_status(&wanted, &root);
     let mut orca = orca_status(&wanted, agent, prompt.as_deref());
@@ -394,13 +394,7 @@ pub fn status_text(status: &Value) -> String {
 /// finds its own automation among the user's others.
 fn automation_file() -> Result<PathBuf> {
     let file = paths::prompts().join("automation.md");
-    std::fs::canonicalize(&file).map_err(|e| Error(format!("정기 실행 지시문이 없다: {}: {e}", file.display())))
-}
-
-/// The `ach` this run is, which scheduled jobs and the Orca automation call. It is not on the
-/// user's PATH.
-fn ach_path() -> PathBuf {
-    paths::bin_dir().join("ach")
+    paths::canonicalize(&file).map_err(|e| Error(format!("정기 실행 지시문이 없다: {}: {e}", file.display())))
 }
 
 /// The Orca automation's prompt: the instructions file, and where `ach` is, because an agent
@@ -450,7 +444,7 @@ fn orca_install(config: &Config, cron: &Cron) -> Result<Value> {
         crate::bail!("orca CLI가 PATH에 없다. schedule.scheduler를 launchd나 cron으로 두거나 Orca를 설치한다");
     }
     let found = orca_automations()?;
-    let prompt = orca_prompt(&automation_file()?, &ach_path());
+    let prompt = orca_prompt(&automation_file()?, &paths::ach_exe());
     if let Some(id) = found.first().and_then(|a| a["id"].as_str()) {
         orca_json(&[
             "automations",
@@ -682,8 +676,12 @@ fn launchd_installed(root: &Path) -> bool {
 }
 
 fn domain() -> String {
+    #[cfg(unix)]
     // SAFETY: getuid has no preconditions and cannot fail.
-    format!("gui/{}", unsafe { getuid() })
+    let uid = unsafe { getuid() };
+    #[cfg(not(unix))]
+    let uid = 0;
+    format!("gui/{uid}")
 }
 
 fn launchctl(args: &[&str]) -> Result<std::process::Output> {
@@ -971,7 +969,16 @@ pub fn cron_remove_with(program: &str, root: &Path) -> Result<Value> {
     Ok(json!({"scheduler": "cron", "removed": existed}))
 }
 
+/// crontab exists on macOS and Linux only.
+fn unix_only() -> Result<()> {
+    if cfg!(windows) {
+        crate::bail!("cron은 macOS와 Linux에서만 쓸 수 있다. Windows에서는 schedule.scheduler를 orca로 둔다");
+    }
+    Ok(())
+}
+
 fn cron_install(cron: &Cron) -> Result<Value> {
+    unix_only()?;
     let exe = std::env::current_exe()?;
     let root = std::fs::canonicalize(paths::root())?;
     let path_env = std::env::var("PATH").unwrap_or_default();
@@ -979,6 +986,7 @@ fn cron_install(cron: &Cron) -> Result<Value> {
 }
 
 fn cron_remove() -> Result<Value> {
+    unix_only()?;
     cron_remove_with("crontab", &checkout_root())
 }
 

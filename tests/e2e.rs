@@ -1,7 +1,9 @@
 //! One contest through the whole lifecycle with the real `ach` binary: add, gate, route, a
 //! headless session on a stand-in runner, approval, submission, cleanup. Offline: the runner is a
 //! script on PATH, the remote is a local bare repository, and HOME, git config and ACH_HOME
-//! are temporary.
+//! are temporary. Unix only: the stand-in runner is an `sh` script, and Windows resolves `omp`
+//! to `omp.exe`.
+#![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

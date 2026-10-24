@@ -4,7 +4,8 @@
 //! - `headless`: a detached background process; no TTY, so the runner's one-shot command is used.
 //! - `terminal`: replace the current process (used by `ach chat`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::config::Config;
 use crate::error::Result;
@@ -67,9 +68,72 @@ pub fn shell_join(argv: &[String]) -> String {
     argv.iter().map(|w| shell_quote(w)).collect::<Vec<_>>().join(" ")
 }
 
-/// The line a terminal types: `cd <cwd> && <argv>` (pi, claude and dsh have no cwd flag).
-pub fn shell_command(cwd: &std::path::Path, argv: &[String]) -> String {
+/// The line a terminal types to run `argv` in `cwd`. `argv` may start with `env NAME=value…`
+/// ([`crate::launch::session_env`]). On Unix this is `cd <cwd> && <argv>` (pi, claude and dsh have
+/// no cwd flag); on Windows it is the same in PowerShell, which Orca terminals there run.
+pub fn shell_command(cwd: &Path, argv: &[String]) -> String {
+    if cfg!(windows) {
+        return powershell_command(cwd, argv);
+    }
     format!("cd {} && {}", shell_quote(&cwd.to_string_lossy()), shell_join(argv))
+}
+
+/// Quote one word for PowerShell: a single-quoted string, in which only quote characters (ASCII
+/// and the typographic ones PowerShell also accepts) need doubling.
+pub fn powershell_quote(word: &str) -> String {
+    let mut out = String::with_capacity(word.len() + 2);
+    out.push('\'');
+    for c in word.chars() {
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
+}
+
+/// `Set-Location -LiteralPath <cwd>; if ($?) { $env:NAME = <value>; … & <program> <args> }`: the
+/// variables are set only when the folder exists, and every word is quoted, so nothing in it is
+/// read as PowerShell syntax (`@`, `$`, `;`).
+pub fn powershell_command(cwd: &Path, argv: &[String]) -> String {
+    let (env, command) = split_env(argv);
+    let mut line = format!("Set-Location -LiteralPath {}; if ($?) {{ ", powershell_quote(&cwd.to_string_lossy()));
+    for (name, value) in env {
+        line.push_str(&format!("$env:{name} = {}; ", powershell_quote(value)));
+    }
+    line.push('&');
+    for word in command {
+        line.push(' ');
+        line.push_str(&powershell_quote(word));
+    }
+    line.push_str(" }");
+    line
+}
+
+/// `env NAME=value… program args…` split into the assignments and the command; an argv without
+/// the `env` prefix has no assignments.
+pub fn split_env(argv: &[String]) -> (Vec<(&str, &str)>, &[String]) {
+    let Some(("env", rest)) = argv.split_first().map(|(head, rest)| (head.as_str(), rest)) else {
+        return (Vec::new(), argv);
+    };
+    let count = rest.iter().take_while(|w| w.split_once('=').is_some_and(|(name, _)| is_env_name(name))).count();
+    let env = rest[..count].iter().filter_map(|w| w.split_once('=')).collect();
+    (env, &rest[count..])
+}
+
+fn is_env_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// A [`Command`] for `argv`, with the `env NAME=value` prefix applied as environment variables
+/// rather than run through an `env` program (Windows has none).
+pub fn command(argv: &[String]) -> Result<Command> {
+    let (env, words) = split_env(argv);
+    let Some((program, args)) = words.split_first() else { crate::bail!("실행할 명령이 비었다") };
+    let mut command = Command::new(program);
+    command.args(args).envs(env);
+    Ok(command)
 }
 
 /// Run a backend CLI (bounded by [`crate::process::LOCAL`]) and return stdout, failing with its stderr.
