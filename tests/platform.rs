@@ -90,6 +90,20 @@ fn cron_line_quotes_paths_and_escapes_percent() {
     assert!(schedule::cron_line(Path::new("/opt/harness"), Path::new("/a"), &cron, "/bin\n* * * * * x").is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn scheduled_path_drops_duplicates_missing_and_temp_dirs() {
+    let home = scratch("path");
+    let (a, b) = (home.join("a"), home.join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    let outside = std::env::current_dir().unwrap();
+    let outside = outside.display();
+    let raw = format!("{outside}:{}:relative/bin::{}:{outside}:/usr/bin", a.display(), b.display());
+    // `a` lives under the temp dir like an AppImage mount, `b` does not exist.
+    assert_eq!(schedule::scheduled_path(&raw), format!("{outside}:/usr/bin"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 fn crontab_block_replace_and_remove_keep_other_lines() {
     let root = Path::new("/srv/harness");

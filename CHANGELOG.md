@@ -14,6 +14,7 @@ All notable changes. Versions follow [Semantic Versioning](https://semver.org/);
 - Agent files with CRLF line endings (a Windows checkout with `core.autocrlf`) were rejected as having no frontmatter.
 - `which` (runner and workspace availability) splits `PATH` with the platform separator and looks for `<name>.exe` on Windows; the session `PATH` uses `;` there. Canonical paths shown to agents, put on `PATH` or written into the Orca automation prompt drop Windows' `\\?\` prefix.
 - On Windows: prompt and persona files with CRLF line endings are read as LF, so rendered instructions do not mix the two; `ach check` reports files with `/` separators as on other systems; `ach install` links folders with a junction when symlinks need privileges the user lacks.
+- `ach schedule install` with `cron` failed with `"-":2: command too long` when the installing shell had a long `PATH`: the crontab line embedded it verbatim and cron caps a command at 1000 bytes. The `cron` and `launchd` jobs now get that `PATH` without duplicates, relative entries, missing directories, or entries under the temp dir (AppImage mounts like `/tmp/.mount_*` that vanish on restart).
 
 ### Changed
 - Paginated report, proposal, paper, and application deliverables require direct visual inspection of every rendered page. Metadata, style values, extracted text, OCR, and successful image generation do not replace page-by-page inspection.

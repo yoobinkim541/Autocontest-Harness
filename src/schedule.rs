@@ -706,7 +706,7 @@ fn launchd_install(cron: &Cron) -> Result<Value> {
     macos_only()?;
     let exe = std::env::current_exe()?;
     let root = std::fs::canonicalize(paths::root())?;
-    let path_env = std::env::var("PATH").unwrap_or_default();
+    let path_env = scheduled_path(&std::env::var("PATH").unwrap_or_default());
     let content = plist(&exe, &root, cron, &path_env)?;
     std::fs::create_dir_all(root.join("data").join("logs"))?;
     let label = label(&root);
@@ -826,6 +826,24 @@ fn launchd_status(wanted: &str, root: &Path) -> Value {
 }
 
 // ---- crontab ----
+
+/// The `PATH` a scheduled run gets: the installing shell's `PATH` with duplicates, relative
+/// entries, missing directories and anything under the temp dir (AppImage mounts like
+/// `/tmp/.mount_*` vanish on restart) removed, order kept. A raw interactive `PATH` easily passes
+/// cron's 1000-byte command limit (`"-":N: command too long`).
+pub fn scheduled_path(path_env: &str) -> String {
+    let temp = std::env::temp_dir();
+    let temp = paths::canonicalize(&temp).unwrap_or(temp);
+    let mut kept: Vec<&str> = Vec::new();
+    for dir in path_env.split(':') {
+        let path = Path::new(dir);
+        if kept.contains(&dir) || !path.is_absolute() || !path.is_dir() || path.starts_with(&temp) {
+            continue;
+        }
+        kept.push(dir);
+    }
+    kept.join(":")
+}
 
 fn cron_markers(root: &Path) -> (String, String) {
     let root = root.display();
@@ -981,7 +999,7 @@ fn cron_install(cron: &Cron) -> Result<Value> {
     unix_only()?;
     let exe = std::env::current_exe()?;
     let root = std::fs::canonicalize(paths::root())?;
-    let path_env = std::env::var("PATH").unwrap_or_default();
+    let path_env = scheduled_path(&std::env::var("PATH").unwrap_or_default());
     cron_install_with("crontab", &exe, &root, cron, &path_env)
 }
 

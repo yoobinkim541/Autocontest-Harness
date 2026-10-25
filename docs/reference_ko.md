@@ -247,7 +247,7 @@ ach schedule remove      # 지운다(다른 스케줄러는 --scheduler orca|lau
 
 **launchd**(`scheduler: "launchd"`, macOS 전용이며 다른 곳에서는 거절한다). `ach autorun`은 설정한 러너의 한 번 실행 명령으로 저장소 루트에서 이 절차를 한 번 돌리고, 출력을 `data/logs/autorun-<시각>.log`에 남긴다. `schedule install`은 cron을 `StartCalendarInterval` 항목으로 바꾼 `~/Library/LaunchAgents/<라벨>.plist`를 쓰고 불러온다. 라벨은 `io.github.fmsongx2.autocontest-harness.<16진수 8자리>`이고, 끝자리는 클론 경로의 해시라 클론 두 개가 부딪히지 않는다. 예전 고정 라벨의 plist는 `status`가 `launchd.legacy`로 알리고, 이 클론의 것이면 `install`이 정리한다. 작업에는 `ACH_HOME`(클론 위치)과 설치 시점의 `PATH`가 고정되므로, 도구 위치가 바뀌면 `schedule install`을 다시 실행한다. 일 칸의 `*` 간격과 요일을 함께 건 식(`0 8 */2 * 1`)은 launchd로 나타낼 수 없어 거절한다.
 
-**cron**(`scheduler: "cron"`, macOS와 Linux). `schedule install --scheduler cron`은 사용자 crontab에서 `# BEGIN autocontest-ach <루트>`와 `# END autocontest-ach <루트>` 사이의 이 클론 블록을 새로 쓰고, 다른 줄은 건드리지 않는다. 작업은 `<cron> cd <루트> && ACH_HOME=<루트> PATH=<설치 시점 PATH> <harness 실행 파일> autorun >> <루트>/data/logs/cron.log 2>&1`이다. `remove`는 그 블록만 지운다. `status`는 `crontab: {available, installed, cron, in_sync, next_run, log}`로 알린다.
+**cron**(`scheduler: "cron"`, macOS와 Linux). `schedule install --scheduler cron`은 사용자 crontab에서 `# BEGIN autocontest-ach <루트>`와 `# END autocontest-ach <루트>` 사이의 이 클론 블록을 새로 쓰고, 다른 줄은 건드리지 않는다. 작업은 `<cron> cd <루트> && ACH_HOME=<루트> PATH=<설치 시점 PATH> <harness 실행 파일> autorun >> <루트>/data/logs/cron.log 2>&1`이다. cron은 1000바이트가 넘는 명령을 거절하므로, 설치 시점 `PATH`(launchd 작업도 같다)에서 중복, 상대 경로, 없는 폴더, 임시 폴더 아래 항목을 뺀다. `remove`는 그 블록만 지운다. `status`는 `crontab: {available, installed, cron, in_sync, next_run, log}`로 알린다.
 
 `--json` 없이 `schedule status`를 실행하면 짧은 요약을 보여 준다. 설정 한 줄 뒤에 Orca·launchd·cron마다 설치 여부, 설정과 맞는지, 다음 실행을 적는다.
 

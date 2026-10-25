@@ -13,6 +13,7 @@
   - 줄 끝이 CRLF인 에이전트 파일(`core.autocrlf`를 켠 Windows 클론)을 frontmatter가 없다고 거절했다.
   - 러너·작업 환경이 있는지 보는 `which`가 플랫폼 구분자로 `PATH`를 나누고 Windows에서는 `<이름>.exe`를 찾는다. 세션 `PATH`도 Windows에서는 `;`로 잇는다. 에이전트에게 보이거나 `PATH`·Orca automation 프롬프트에 들어가는 정규 경로에서 Windows의 `\\?\` 접두사를 뗀다.
   - Windows에서 줄 끝이 CRLF인 지시문·페르소나 파일을 LF로 읽어, 만들어지는 지시문에 두 줄 끝이 섞이지 않는다. `ach check`는 다른 OS처럼 `/`로 이은 파일 경로를 알린다. `ach install`은 심볼릭 링크 권한이 없으면 폴더를 junction으로 잇는다.
+  - 설치하는 셸의 `PATH`가 길면 `cron` 스케줄러의 `ach schedule install`이 `"-":2: command too long`으로 실패했다. crontab 줄에 `PATH`를 그대로 넣었는데 cron은 명령을 1000바이트로 자른다. 이제 `cron`과 `launchd` 작업은 그 `PATH`에서 중복, 상대 경로, 없는 폴더, 임시 폴더 아래 항목(재시작하면 사라지는 `/tmp/.mount_*` 같은 AppImage 마운트)을 뺀 값을 받는다.
 - **바뀜**:
   - 보고서·제안서·논문·신청서 등 페이지가 있는 제출 문서는 렌더된 모든 페이지를 비전으로 직접 확인해야 한다. 메타데이터·서식 설정값·추출 텍스트·OCR·이미지 생성 성공으로 전 페이지 검수를 대신하지 않는다.
   - 작성 플레이북, 실행/HQ 지시, ContestEditor, ContestJudge, 제출 템플릿에 파일 해시와 페이지별 검수 근거를 요구한다. 수정·서명·재저장·변환 뒤에는 이전 시각 검수를 무효로 하고 전 페이지를 재검수한다. 최종본의 미검수 페이지가 있으면 ContestJudge가 거절한다. `ach`의 이미지 판독 기능이 아니라 에이전트 검수 지침이다.
